@@ -1,0 +1,7 @@
+{
+  "repository": "example/review-target",
+  "number": 42,
+  "baseSha": "1111111111111111111111111111111111111111",
+  "headSha": "2222222222222222222222222222222222222222",
+  "diff": "diff --git a/message.txt b/message.txt\nindex ce01362..94954ab 100644\n--- a/message.txt\n+++ b/message.txt\n@@ -1 +1 @@\n-hello\n+hello owl\n"
+}

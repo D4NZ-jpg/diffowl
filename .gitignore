@@ -2,6 +2,11 @@
 .DS_Store
 node_modules/
 dist/
+!dist/
+dist/*
+!dist/action/
+dist/action/*
+!dist/action/index.js
 coverage/
 .env
 .env.*

@@ -1,0 +1,36 @@
+{
+  "name": "diffowl",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "action.yml",
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/review-engine.d.ts",
+      "import": "./dist/review-engine.js"
+    }
+  },
+  "bin": {
+    "diffowl": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "npm run clean && tsc -p tsconfig.build.json && node scripts/build-action.mjs",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,96 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+const exec = promisify(execFile);
+const projectRoot = fileURLToPath(new URL("..", import.meta.url));
+const temporaryRepositories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryRepositories.splice(0).map((path) =>
+      rm(path, { recursive: true, force: true }),
+    ),
+  );
+});
+
+async function git(repository: string, ...args: string[]): Promise<string> {
+  const result = await exec("git", args, { cwd: repository });
+  return result.stdout.trim();
+}
+
+describe("installable Review OWL Action", () => {
+  it("runs the bundled Action in a representative same-repo checkout", async () => {
+    const metadata = await readFile(join(projectRoot, "action.yml"), "utf8");
+    expect(metadata).toContain("using: node20");
+    expect(metadata).toContain("main: dist/action/index.js");
+
+    const repository = await mkdtemp(join(tmpdir(), "diffowl-action-"));
+    temporaryRepositories.push(repository);
+    await git(repository, "init", "--quiet");
+    await git(repository, "config", "user.name", "Review OWL Test");
+    await git(repository, "config", "user.email", "review-owl@example.com");
+
+    await writeFile(join(repository, "message.txt"), "hello\n", "utf8");
+    await git(repository, "add", "message.txt");
+    await git(repository, "commit", "--quiet", "-m", "base");
+    const baseSha = await git(repository, "rev-parse", "HEAD");
+
+    await writeFile(join(repository, "message.txt"), "hello owl\n", "utf8");
+    await git(repository, "commit", "--quiet", "-am", "head");
+    const headSha = await git(repository, "rev-parse", "HEAD");
+
+    const eventPath = join(repository, "event.json");
+    const outputPath = join(repository, "action-output");
+    await writeFile(
+      eventPath,
+      JSON.stringify({
+        repository: { full_name: "example/review-target" },
+        pull_request: {
+          number: 42,
+          base: {
+            sha: baseSha,
+            repo: { full_name: "example/review-target" },
+          },
+          head: {
+            sha: headSha,
+            repo: { full_name: "example/review-target" },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = await exec(
+      "node",
+      [join(projectRoot, "dist/action/index.js")],
+      {
+        cwd: repository,
+        env: {
+          ...process.env,
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_OUTPUT: outputPath,
+        },
+      },
+    );
+
+    const outcome = JSON.parse(result.stdout);
+    expect(outcome).toMatchObject({
+      type: "partial_coverage",
+      pullRequest: {
+        repository: "example/review-target",
+        number: 42,
+        baseSha,
+        headSha,
+      },
+    });
+    expect(await readFile(outputPath, "utf8")).toBe(
+      `outcome=${JSON.stringify(outcome)}\n`,
+    );
+  });
+});

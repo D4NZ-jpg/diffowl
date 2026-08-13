@@ -1,0 +1,8 @@
+name: Review OWL
+description: Run the self-hostable Diffowl Review engine for a same-repo pull request.
+outputs:
+  outcome:
+    description: The typed Review outcome as JSON.
+runs:
+  using: node20
+  main: dist/action/index.js
