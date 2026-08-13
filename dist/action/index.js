@@ -2,6 +2,79 @@
 import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
+// src/trust.ts
+var deniedCapabilities = {
+  validationCommands: "denied",
+  secrets: "denied",
+  writeTokens: "denied",
+  privilegedTools: "denied",
+  publishing: "denied"
+};
+function classifyPublisher(validation) {
+  const validated = validation.schemaValid && validation.sizeWithinLimit && validation.sourceRunVerified && validation.headShaMatches && validation.surfacesAllowed && validation.resultCurrent;
+  if (!validated) {
+    return {
+      class: "unsafe_or_unsupported",
+      reason: "Privileged publishing requires complete data-only validation.",
+      capabilities: deniedCapabilities
+    };
+  }
+  return {
+    class: "privileged_publisher",
+    capabilities: {
+      ...deniedCapabilities,
+      secrets: "publisher_token_only",
+      writeTokens: "publisher_token_only",
+      publishing: "sha_bound_data_only"
+    }
+  };
+}
+function classifyTrust(context) {
+  if (context.type === "unsupported") {
+    return {
+      class: "unsafe_or_unsupported",
+      reason: context.reason,
+      capabilities: deniedCapabilities
+    };
+  }
+  if (context.type === "local_cli") {
+    return {
+      class: "local_cli",
+      capabilities: {
+        validationCommands: "local_user_authorized",
+        secrets: "local_user_authorized",
+        writeTokens: "local_user_authorized",
+        privilegedTools: "local_user_authorized",
+        publishing: "denied"
+      }
+    };
+  }
+  if (context.type === "privileged_publisher") {
+    return classifyPublisher(context.validation);
+  }
+  if (context.actor === "dependabot[bot]") {
+    return {
+      class: "untrusted_pull_request",
+      source: "dependabot",
+      capabilities: deniedCapabilities
+    };
+  }
+  if (context.headRepository !== context.repository) {
+    return {
+      class: "untrusted_pull_request",
+      source: "fork",
+      capabilities: deniedCapabilities
+    };
+  }
+  return {
+    class: "trusted_same_repo_pull_request",
+    capabilities: {
+      ...deniedCapabilities,
+      validationCommands: "sandboxed"
+    }
+  };
+}
+
 // src/review-engine.ts
 var PROJECT_POLICY_PATH = ".diffowl.json";
 var PROJECT_POLICY_CEILINGS = {
@@ -85,6 +158,9 @@ function parseProjectPolicy(contents) {
   }
   return { valid: true, policy: value };
 }
+function partialCoverageReason(trust) {
+  return trust.class === "untrusted_pull_request" ? "Trust restrictions permit static review only; validation commands are denied." : "The tracer path does not analyze changes yet.";
+}
 async function runReview(input) {
   const result = parseProjectPolicy(input.policy.contents);
   if (!result.valid) {
@@ -92,13 +168,15 @@ async function runReview(input) {
       type: "configuration_failure",
       pullRequest: pullRequestFrom(input),
       policySource: input.policy.source,
-      reason: result.reason
+      reason: result.reason,
+      trust: input.trust
     };
   }
   return {
     type: "partial_coverage",
     pullRequest: pullRequestFrom(input),
-    reason: "The tracer path does not analyze changes yet.",
+    reason: partialCoverageReason(input.trust),
+    trust: input.trust,
     policy: {
       source: input.policy.source,
       effective: result.policy
@@ -185,25 +263,50 @@ function isPullRequestEvent(value) {
   const pullRequest = event.pull_request;
   return typeof pullRequest.number === "number" && Number.isInteger(pullRequest.number) && isRef(pullRequest.base) && isRef(pullRequest.head);
 }
+async function skipUnsafeContext(io, reason) {
+  const outcome = {
+    type: "policy_skip",
+    reason,
+    trust: classifyTrust({ type: "unsupported", reason })
+  };
+  await io.setOutput("outcome", JSON.stringify(outcome));
+  return outcome;
+}
 async function runAction(env, io = createActionIo(env)) {
   const eventPath = env.GITHUB_EVENT_PATH;
   if (eventPath === void 0) {
     throw new Error("GITHUB_EVENT_PATH is required.");
   }
+  if (env.GITHUB_EVENT_NAME !== "pull_request") {
+    return skipUnsafeContext(
+      io,
+      `GitHub event "${env.GITHUB_EVENT_NAME ?? "unknown"}" is not a safe pull_request context.`
+    );
+  }
   const event = JSON.parse(await io.readFile(eventPath, "utf8"));
   if (!isPullRequestEvent(event)) {
-    throw new Error("The GitHub event is not a pull-request event.");
+    return skipUnsafeContext(io, "The GitHub event is not a supported pull-request event.");
   }
   const { pull_request: pullRequest, repository } = event;
-  if (pullRequest.base.repo.full_name !== repository.full_name || pullRequest.head.repo.full_name !== repository.full_name) {
-    throw new Error("The tracer Action supports same-repo pull requests only.");
+  if (pullRequest.base.repo.full_name !== repository.full_name) {
+    return skipUnsafeContext(
+      io,
+      "The pull request base repository does not match the event repository."
+    );
   }
+  const trust = classifyTrust({
+    type: "github_pull_request",
+    repository: repository.full_name,
+    headRepository: pullRequest.head.repo.full_name,
+    actor: pullRequest.user?.login
+  });
   const outcome = await runReview({
     repository: repository.full_name,
     number: pullRequest.number,
     baseSha: pullRequest.base.sha,
     headSha: pullRequest.head.sha,
     diff: await io.readDiff(pullRequest.base.sha, pullRequest.head.sha),
+    trust,
     policy: {
       source: {
         type: "trusted_base_branch",

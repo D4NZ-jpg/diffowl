@@ -1,5 +1,5 @@
 name: Review OWL
-description: Run the self-hostable Diffowl Review engine for a same-repo pull request.
+description: Classify pull-request trust and run the self-hostable Diffowl Review engine.
 outputs:
   outcome:
     description: The typed Review outcome as JSON.

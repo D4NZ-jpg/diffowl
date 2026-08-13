@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
 import { PROJECT_POLICY_PATH, type ReviewOutcome, runReview } from "./review-engine.js";
+import { classifyTrust } from "./trust.js";
 
 interface GitHubPullRequestEvent {
   repository: { full_name: string };
@@ -9,6 +10,7 @@ interface GitHubPullRequestEvent {
     number: number;
     base: { sha: string; repo: { full_name: string } };
     head: { sha: string; repo: { full_name: string } };
+    user?: { login: string };
   };
 }
 
@@ -110,6 +112,16 @@ function isPullRequestEvent(value: unknown): value is GitHubPullRequestEvent {
   );
 }
 
+async function skipUnsafeContext(io: ActionIo, reason: string): Promise<ReviewOutcome> {
+  const outcome: ReviewOutcome = {
+    type: "policy_skip",
+    reason,
+    trust: classifyTrust({ type: "unsupported", reason }),
+  };
+  await io.setOutput("outcome", JSON.stringify(outcome));
+  return outcome;
+}
+
 export async function runAction(
   env: NodeJS.ProcessEnv,
   io: ActionIo = createActionIo(env),
@@ -118,19 +130,32 @@ export async function runAction(
   if (eventPath === undefined) {
     throw new Error("GITHUB_EVENT_PATH is required.");
   }
+  if (env.GITHUB_EVENT_NAME !== "pull_request") {
+    return skipUnsafeContext(
+      io,
+      `GitHub event "${env.GITHUB_EVENT_NAME ?? "unknown"}" is not a safe pull_request context.`,
+    );
+  }
 
   const event: unknown = JSON.parse(await io.readFile(eventPath, "utf8"));
   if (!isPullRequestEvent(event)) {
-    throw new Error("The GitHub event is not a pull-request event.");
+    return skipUnsafeContext(io, "The GitHub event is not a supported pull-request event.");
   }
 
   const { pull_request: pullRequest, repository } = event;
-  if (
-    pullRequest.base.repo.full_name !== repository.full_name ||
-    pullRequest.head.repo.full_name !== repository.full_name
-  ) {
-    throw new Error("The tracer Action supports same-repo pull requests only.");
+  if (pullRequest.base.repo.full_name !== repository.full_name) {
+    return skipUnsafeContext(
+      io,
+      "The pull request base repository does not match the event repository.",
+    );
   }
+
+  const trust = classifyTrust({
+    type: "github_pull_request",
+    repository: repository.full_name,
+    headRepository: pullRequest.head.repo.full_name,
+    actor: pullRequest.user?.login,
+  });
 
   const outcome = await runReview({
     repository: repository.full_name,
@@ -138,6 +163,7 @@ export async function runAction(
     baseSha: pullRequest.base.sha,
     headSha: pullRequest.head.sha,
     diff: await io.readDiff(pullRequest.base.sha, pullRequest.head.sha),
+    trust,
     policy: {
       source: {
         type: "trusted_base_branch",

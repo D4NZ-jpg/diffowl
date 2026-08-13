@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 import { type PullRequestInput, runReview } from "./review-engine.js";
+import { classifyTrust } from "./trust.js";
 
 export interface CliIo {
   readFile(path: string, encoding: "utf8"): Promise<string>;
@@ -17,7 +18,7 @@ const processIo: CliIo = {
   stderr: (text) => process.stderr.write(text),
 };
 
-type CliPullRequestInput = Omit<PullRequestInput, "policy">;
+type CliPullRequestInput = Omit<PullRequestInput, "policy" | "trust">;
 
 function isPullRequestInput(value: unknown): value is CliPullRequestInput {
   if (typeof value !== "object" || value === null) {
@@ -71,6 +72,7 @@ export async function runCli(args: readonly string[], io: CliIo = processIo): Pr
 
     const outcome = await runReview({
       ...input,
+      trust: classifyTrust({ type: "local_cli" }),
       policy: {
         source: { type: "local_invocation", path: paths.policy },
         contents: await io.readFile(paths.policy, "utf8"),

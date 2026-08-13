@@ -1,3 +1,13 @@
+import type { TrustClassification } from "./trust.js";
+
+export type {
+  PublisherValidation,
+  TrustCapabilities,
+  TrustClassification,
+  TrustContext,
+} from "./trust.js";
+export { classifyTrust } from "./trust.js";
+
 export const PROJECT_POLICY_PATH = ".diffowl.json";
 
 export const PROJECT_POLICY_CEILINGS = {
@@ -43,13 +53,20 @@ export interface ProjectPolicy {
 export interface PullRequestInput extends ReviewedPullRequest {
   diff: string;
   policy: ProjectPolicyInput;
+  trust: TrustClassification;
 }
 
 interface OutcomeBase {
   pullRequest: ReviewedPullRequest;
+  trust: TrustClassification;
 }
 
 export type ReviewOutcome =
+  | {
+      type: "policy_skip";
+      reason: string;
+      trust: TrustClassification;
+    }
   | (OutcomeBase & {
       type: "partial_coverage";
       reason: string;
@@ -171,6 +188,12 @@ function parseProjectPolicy(contents: string | undefined): PolicyParseResult {
   return { valid: true, policy: value as ProjectPolicy };
 }
 
+function partialCoverageReason(trust: TrustClassification): string {
+  return trust.class === "untrusted_pull_request"
+    ? "Trust restrictions permit static review only; validation commands are denied."
+    : "The tracer path does not analyze changes yet.";
+}
+
 export async function runReview(input: PullRequestInput): Promise<ReviewOutcome> {
   const result = parseProjectPolicy(input.policy.contents);
   if (!result.valid) {
@@ -179,13 +202,15 @@ export async function runReview(input: PullRequestInput): Promise<ReviewOutcome>
       pullRequest: pullRequestFrom(input),
       policySource: input.policy.source,
       reason: result.reason,
+      trust: input.trust,
     };
   }
 
   return {
     type: "partial_coverage",
     pullRequest: pullRequestFrom(input),
-    reason: "The tracer path does not analyze changes yet.",
+    reason: partialCoverageReason(input.trust),
+    trust: input.trust,
     policy: {
       source: input.policy.source,
       effective: result.policy,

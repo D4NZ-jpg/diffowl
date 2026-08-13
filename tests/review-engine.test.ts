@@ -33,6 +33,16 @@ const representativePullRequest: PullRequestInput = {
     "+hello owl",
     "",
   ].join("\n"),
+  trust: {
+    class: "trusted_same_repo_pull_request",
+    capabilities: {
+      validationCommands: "sandboxed",
+      secrets: "denied",
+      writeTokens: "denied",
+      privilegedTools: "denied",
+      publishing: "denied",
+    },
+  },
   policy: {
     source: {
       type: "trusted_base_branch" as const,
@@ -51,6 +61,7 @@ describe("runReview", () => {
       type: "partial_coverage",
       pullRequest: reviewedPullRequest,
       reason: "The tracer path does not analyze changes yet.",
+      trust: representativePullRequest.trust,
       policy: {
         source: representativePullRequest.policy.source,
         effective: effectivePolicy,
@@ -92,6 +103,7 @@ describe("runReview", () => {
       pullRequest: reviewedPullRequest,
       policySource: representativePullRequest.policy.source,
       reason: "Project policy is not valid JSON.",
+      trust: representativePullRequest.trust,
     });
   });
 });

@@ -7,7 +7,7 @@ Diffowl is a self-hostable pull-request review system. Review OWL runs an eviden
 
 ## GitHub Action
 
-The Action supports same-repository pull requests and requires a checkout with full history so it can read the pull-request diff.
+The Action classifies the pull-request context before it reads repository content. It requires a checkout with full history so it can read the pull-request diff.
 
 ```yaml
 name: Review OWL
@@ -30,7 +30,11 @@ jobs:
         uses: D4NZ-jpg/diffowl@main
 ```
 
-The Action reads `.diffowl.json` from the pull request's base commit. It never reads policy from the pull-request head or synthetic merge commit, so a pull request cannot weaken its own review policy. The `outcome` output contains the typed Review outcome as JSON. Invalid, missing, or security-weakening policy produces a `configuration_failure` outcome. The engine returns data only; GitHub publication remains the responsibility of an adapter.
+The Action reads `.diffowl.json` from the pull request's base commit. It never reads policy from the pull-request head or synthetic merge commit, so a pull request cannot weaken its own review policy. The `outcome` output contains the typed Review outcome as JSON, including its Trust class and effective capabilities.
+
+Same-repository pull requests are eligible for configured validation commands only in a sandbox and within the policy timeout. Fork and Dependabot pull requests are untrusted: validation commands, secrets, write tokens, privileged tools, and publishing are denied. They receive a `partial_coverage` outcome while the tracer can perform only static review. Unsupported or unsafe event contexts receive a `policy_skip`; invalid, missing, over-budget, or security-weakening policy receives a `configuration_failure`. None of these cases can appear clean.
+
+The engine returns data only; GitHub publication remains the responsibility of an adapter. A future privileged publisher must use the separate SHA-bound, data-only capability class and cannot execute pull-request code.
 
 A complete example is in [`examples/representative-repository`](examples/representative-repository).
 
@@ -46,7 +50,7 @@ node dist/cli.js review \
   --policy tests/fixtures/project-policy.json
 ```
 
-The CLI reads the policy path supplied by the local user. Its outcome marks the policy source as `local_invocation`; local policy execution is not CI trust evidence.
+The CLI reads the policy path supplied by the local user. Its outcome uses the `local_cli` Trust class and marks local credentials, tools, and validation as `local_user_authorized`. Publishing remains denied. Local policy execution is not CI trust evidence.
 
 The pull-request input file has this shape:
 

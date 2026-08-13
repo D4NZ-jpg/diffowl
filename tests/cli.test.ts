@@ -34,6 +34,16 @@ describe("diffowl review", () => {
         headSha: "2222222222222222222222222222222222222222",
       },
       reason: "The tracer path does not analyze changes yet.",
+      trust: {
+        class: "local_cli",
+        capabilities: {
+          validationCommands: "local_user_authorized",
+          secrets: "local_user_authorized",
+          writeTokens: "local_user_authorized",
+          privilegedTools: "local_user_authorized",
+          publishing: "denied",
+        },
+      },
       policy: {
         source: {
           type: "local_invocation",
