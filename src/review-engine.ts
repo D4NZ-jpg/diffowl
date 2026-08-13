@@ -85,6 +85,24 @@ export type {
 export { classifyTrust } from "./trust.js";
 export type { ReviewOutcome, ReviewRunMetadata } from "./review-outcome.js";
 export {
+  SYNTHETIC_EVALUATION_CORPUS_VERSION,
+  evaluateSyntheticCorpus,
+} from "./synthetic-evaluation.js";
+export type {
+  ExpectedSyntheticFinding,
+  OutcomeCategory,
+  ReleaseReportCard,
+  SyntheticCaseReport,
+  SyntheticEvaluationCase,
+  SyntheticEvaluationCaseKind,
+  SyntheticEvaluationCorpus,
+  SyntheticEvaluationDiagnosticsInput,
+  SyntheticEvaluationObservation,
+  SyntheticFindingResult,
+  SyntheticReportTokenDiagnostics,
+  UnexpectedSyntheticFinding,
+} from "./synthetic-evaluation.js";
+export {
   createFindingFingerprint,
   parseFindingFingerprint,
   FINDING_FINGERPRINT_VERSION,

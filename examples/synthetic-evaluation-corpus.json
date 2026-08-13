@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "name": "Review OWL release smoke corpus",
+  "cases": [
+    {
+      "id": "material-null-user",
+      "name": "Null user regression should be material",
+      "kind": "material_findings",
+      "expectedOutcome": "findings",
+      "expectedMaterialFindings": [
+        {
+          "id": "null-user-crash",
+          "summary": "Null user crashes the greeting endpoint",
+          "locationPath": "src/greeting.ts"
+        }
+      ]
+    },
+    {
+      "id": "clean-docs-only",
+      "name": "Documentation-only change should remain clean",
+      "kind": "clean_control",
+      "expectedOutcome": "clean",
+      "expectedMaterialFindings": []
+    },
+    {
+      "id": "provider-budget-limit",
+      "name": "Provider budget exhaustion is reported as a limit outcome",
+      "kind": "material_findings",
+      "expectedOutcome": "budget_limit",
+      "expectedMaterialFindings": []
+    }
+  ]
+}

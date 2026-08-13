@@ -76,6 +76,10 @@ The CLI emits a local inspection report as JSON. The report includes the typed R
 
 The CLI reads the policy path supplied by the local user and maps `default` to RunCell's local credentials, reusing supported Codex or Claude logins on the user's machine. Its outcome uses the `local_cli` Trust class and marks local credentials, tools, and validation as `local_user_authorized`. Publishing remains denied. Local policy execution is not CI trust evidence.
 
+## Synthetic evaluation report cards
+
+Embedders can import `evaluateSyntheticCorpus` to turn repeatable synthetic observations into a release report card. A corpus lists material-finding cases and clean controls, each with an expected typed outcome and expected material Findings. Observations attach the Review outcome plus review-ready latency, token, cost, and runtime diagnostics when available. The report card records expected material Findings found and missed, unexpected material Findings and advisory suggestions on clean controls, typed outcome categories (`skip`, `partial`, `limit`, `timeout`, `provider`, `configuration`, `internal`, and related outcomes), and per-case diagnostics. See [`examples/synthetic-evaluation-corpus.json`](examples/synthetic-evaluation-corpus.json) for the stable corpus shape.
+
 The pull-request input file has this shape:
 
 ```json
