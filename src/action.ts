@@ -1,6 +1,14 @@
 import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
+import { addedLinesFromDiff } from "./github-diff.js";
+import {
+  createGitHubTransport,
+  type PublicationAuthorization,
+  type PublicationReceipt,
+  type PublicationTarget,
+  publishReviewOutcome,
+} from "./github-publication.js";
 import { createHostVerificationAdapter } from "./host-verification.js";
 import {
   PROJECT_POLICY_PATH,
@@ -29,6 +37,11 @@ export interface ActionIo {
   readDiff(baseSha: string, headSha: string): Promise<string>;
   readPolicy(revision: string, path: string): Promise<string | undefined>;
   setOutput(name: string, value: string): Promise<void>;
+  publishOutcome?(
+    target: PublicationTarget,
+    outcome: ReviewOutcome,
+    authorization: PublicationAuthorization,
+  ): Promise<PublicationReceipt>;
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>>;
   executeRole?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
   verificationAdapter?: VerificationAdapter;
@@ -72,7 +85,9 @@ function readGitFileAtRevision(revision: string, path: string): Promise<string |
   });
 }
 
-function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
+export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
+  const token = env.GITHUB_TOKEN;
+  delete env.GITHUB_TOKEN;
   return {
     readFile,
     readDiff: readGitDiff,
@@ -84,6 +99,21 @@ function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
       }
       await appendFile(outputPath, `${name}=${value}\n`, "utf8");
     },
+    ...(token === undefined
+      ? {}
+      : {
+          publishOutcome: (
+            target: PublicationTarget,
+            outcome: ReviewOutcome,
+            authorization: PublicationAuthorization,
+          ) =>
+            publishReviewOutcome(
+              createGitHubTransport(token, env.GITHUB_API_URL),
+              target,
+              outcome,
+              authorization,
+            ),
+        }),
   };
 }
 
@@ -157,6 +187,31 @@ function reviewDependencies(env: NodeJS.ProcessEnv, io: ActionIo) {
   };
 }
 
+async function publishActionOutcome(
+  io: ActionIo,
+  repository: string,
+  pullRequest: GitHubPullRequestEvent["pull_request"],
+  outcome: ReviewOutcome,
+  changedLines: PublicationTarget["changedLines"],
+): Promise<void> {
+  await io.setOutput("outcome", JSON.stringify(outcome));
+  if (io.publishOutcome === undefined || outcome.trust.class !== "trusted_same_repo_pull_request") {
+    return;
+  }
+  const receipt = await io.publishOutcome(
+    {
+      repository,
+      pullRequestNumber: pullRequest.number,
+      headSha: pullRequest.head.sha,
+      changedLines,
+    },
+    outcome,
+    { sourceRunVerified: true },
+  );
+  await io.setOutput("publication", JSON.stringify(receipt));
+}
+
+// oxlint-disable-next-line max-lines-per-function
 export async function runAction(
   env: NodeJS.ProcessEnv,
   io: ActionIo = createActionIo(env),
@@ -198,13 +253,15 @@ export async function runAction(
     actor: pullRequest.user?.login,
   });
 
+  const diff = await io.readDiff(pullRequest.base.sha, pullRequest.head.sha);
+  const policyContents = await io.readPolicy(pullRequest.base.sha, PROJECT_POLICY_PATH);
   const outcome = await runReview(
     {
       repository: repository.full_name,
       number: pullRequest.number,
       baseSha: pullRequest.base.sha,
       headSha: pullRequest.head.sha,
-      diff: await io.readDiff(pullRequest.base.sha, pullRequest.head.sha),
+      diff,
       trust,
       policy: {
         source: {
@@ -212,12 +269,18 @@ export async function runAction(
           revision: pullRequest.base.sha,
           path: PROJECT_POLICY_PATH,
         },
-        contents: await io.readPolicy(pullRequest.base.sha, PROJECT_POLICY_PATH),
+        contents: policyContents,
       },
     },
     reviewDependencies(env, io),
   );
 
-  await io.setOutput("outcome", JSON.stringify(outcome));
+  await publishActionOutcome(
+    io,
+    repository.full_name,
+    pullRequest,
+    outcome,
+    addedLinesFromDiff(diff),
+  );
   return outcome;
 }

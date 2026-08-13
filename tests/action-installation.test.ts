@@ -100,6 +100,7 @@ describe("installable Review OWL Action", () => {
       cwd: repository,
       env: {
         ...process.env,
+        GITHUB_TOKEN: undefined,
         GITHUB_EVENT_NAME: "pull_request",
         GITHUB_EVENT_PATH: eventPath,
         GITHUB_OUTPUT: outputPath,

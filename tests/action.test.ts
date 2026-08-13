@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, it } from "vitest";
 
-import { runAction } from "../src/action.js";
+import { createActionIo, runAction } from "../src/action.js";
 import type { RoleExecutionRequest } from "../src/review-engine.js";
 import {
   completedReviewOutcome,
@@ -71,16 +71,16 @@ async function validationAttemptsForRunner(
   return verifierInput?.validationAttempts;
 }
 
-async function actionOutcomeForEvent(event: Record<string, unknown>) {
-  return runAction(
-    { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: "event.json" },
-    {
-      readFile: async () => JSON.stringify(event),
-      readDiff: async () => representativeDiff,
-      readPolicy: async () => representativePolicy,
-      setOutput: async () => undefined,
+function capturingActionIo(outputs: Map<string, string>) {
+  return {
+    readFile,
+    readDiff: async () => representativeDiff,
+    readPolicy: async () => representativePolicy,
+    setOutput: async (name: string, value: string) => {
+      outputs.set(name, value);
     },
-  );
+    executeRole: async (request: RoleExecutionRequest) => emptyRoleResult(request),
+  };
 }
 
 // The adapter contract is intentionally asserted in one integration-style example.
@@ -149,6 +149,63 @@ it("supplies an environment credential profile to the Review engine", async () =
   expect(JSON.parse(outputs.get("outcome") ?? "")).toEqual(outcome);
 });
 
+it("publishes and reports adapter-owned receipts when a publisher is injected", async () => {
+  const outputs = new Map<string, string>();
+  const calls: Array<{ repository: string; pullRequestNumber: number; headSha: string }> = [];
+  const result = await runAction(
+    { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath },
+    {
+      ...capturingActionIo(outputs),
+      publishOutcome: async (target, outcome, authorization) => {
+        calls.push(target);
+        expect(outcome.type).toBe("clean");
+        expect(authorization).toEqual({ sourceRunVerified: true });
+        return {
+          headSha: target.headSha,
+          checkRunId: 1,
+          summaryCommentId: 2,
+          inlineCommentCount: 0,
+          annotationCount: 0,
+        };
+      },
+    },
+  );
+
+  expect(calls).toEqual([
+    {
+      repository: reviewedPullRequest.repository,
+      pullRequestNumber: reviewedPullRequest.number,
+      headSha: reviewedPullRequest.headSha,
+      changedLines: [{ path: "src/message.ts", line: 1 }],
+    },
+  ]);
+  expect(JSON.parse(outputs.get("outcome") ?? "")).toEqual(result);
+  expect(JSON.parse(outputs.get("publication") ?? "")).toEqual({
+    headSha: reviewedPullRequest.headSha,
+    checkRunId: 1,
+    summaryCommentId: 2,
+    inlineCommentCount: 0,
+    annotationCount: 0,
+  });
+});
+
+it("removes GITHUB_TOKEN from the engine environment while retaining a publisher", () => {
+  const env = { GITHUB_TOKEN: "publisher-secret", GITHUB_OUTPUT: "output" };
+  const io = createActionIo(env);
+  expect(env.GITHUB_TOKEN).toBeUndefined();
+  expect(io.publishOutcome).toBeTypeOf("function");
+});
+
+it("does not publish when no publisher is configured", async () => {
+  const outputs = new Map<string, string>();
+  await runAction(
+    { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath },
+    capturingActionIo(outputs),
+  );
+  expect(outputs.has("outcome")).toBe(true);
+  expect(outputs.has("publication")).toBe(false);
+});
+
 it("records validation as unavailable by default on unknown and self-hosted runners", async () => {
   const attempts = await Promise.all([undefined, "self-hosted"].map(validationAttemptsForRunner));
 
@@ -168,11 +225,12 @@ it("executes configured validation by default on a GitHub-hosted runner", async 
   expect(attempts).toEqual([expect.objectContaining({ status: "passed", stdout: "passed" })]);
 });
 
-it("denies risky capabilities for a fork pull request", async () => {
+it("denies risky capabilities and publishing for a fork pull request", async () => {
   const event = pullRequestEvent({
     headRepository: "contributor/review-target",
     actor: "contributor",
   });
+  let published = false;
 
   const outcome = await runAction(
     {
@@ -185,9 +243,14 @@ it("denies risky capabilities for a fork pull request", async () => {
       readDiff: async () => representativeDiff,
       readPolicy: async () => representativePolicy,
       setOutput: async () => undefined,
+      publishOutcome: async () => {
+        published = true;
+        throw new Error("untrusted outcome must not publish");
+      },
     },
   );
 
+  expect(published).toBe(false);
   expect(outcome).toMatchObject({
     type: "partial_coverage",
     reason: "Trust restrictions permit static review only; validation commands are denied.",
@@ -205,11 +268,22 @@ it("denies risky capabilities for a fork pull request", async () => {
   });
 });
 
-it("treats Dependabot as untrusted even when its branch is in the repository", async () => {
+it("treats Dependabot as untrusted and does not publish", async () => {
   const event = pullRequestEvent({ actor: "dependabot[bot]" });
+  let published = false;
+  const outcome = await runAction(
+    { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: "event.json" },
+    {
+      ...capturingActionIo(new Map()),
+      readFile: async () => JSON.stringify(event),
+      publishOutcome: async () => {
+        published = true;
+        throw new Error("Dependabot outcome must not publish");
+      },
+    },
+  );
 
-  const outcome = await actionOutcomeForEvent(event);
-
+  expect(published).toBe(false);
   expect(outcome).toMatchObject({
     type: "partial_coverage",
     reason: "Trust restrictions permit static review only; validation commands are denied.",

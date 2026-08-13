@@ -3,6 +3,8 @@ description: Classify pull-request trust and run the self-hostable Diffowl Revie
 outputs:
   outcome:
     description: The typed Review outcome as JSON.
+  publication:
+    description: Adapter-owned GitHub publication receipts as JSON when GITHUB_TOKEN is configured.
 runs:
   using: node24
   main: dist/action/index.js
