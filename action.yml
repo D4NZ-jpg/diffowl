@@ -1,8 +1,16 @@
 name: Review OWL
 description: Classify pull-request trust and run the self-hostable Diffowl Review engine.
+inputs:
+  state-directory:
+    description: A trusted durable directory for versioned run records and the Finding ledger.
+    required: false
 outputs:
   outcome:
     description: The typed Review outcome as JSON.
+  run-id:
+    description: The persisted Review run identifier, when state-directory is configured.
+  run-metadata:
+    description: Safe persisted Review run metadata as JSON, when state-directory is configured.
 runs:
   using: node24
   main: dist/action/index.js

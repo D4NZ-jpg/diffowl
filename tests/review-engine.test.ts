@@ -183,8 +183,7 @@ describe("runReview role execution", () => {
     expect(executions[0]?.diff).toContain("src/message.ts");
     expect(executions[0]?.diff).not.toContain("dist/message.js");
     expect(outcome).toMatchObject({
-      type: "findings",
-      coverage: "completed_permitted",
+      type: "partial_coverage",
       materialFindings: [
         {
           summary: "Greeting changes the public output",
@@ -449,7 +448,7 @@ describe("runReview role execution", () => {
       },
     });
 
-    expect(outcome.type).toBe("findings");
+    expect(outcome.type).toBe("partial_coverage");
     expect(commandExecuted).toBe(false);
     expect(verifierInput).toMatchObject({
       validationAttempts: [],

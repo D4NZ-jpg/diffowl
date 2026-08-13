@@ -2,10 +2,11 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 
 import { runAction } from "../src/action.js";
 import type { RoleExecutionRequest } from "../src/review-engine.js";
+import { persistedRunCount, temporaryStateDirectories } from "./persistence-fixtures.js";
 import {
   completedReviewOutcome,
   emptyRoleResult,
@@ -20,6 +21,9 @@ const eventPath = fileURLToPath(
 );
 
 const representativePolicy = JSON.stringify(projectPolicy());
+const stateDirectories = temporaryStateDirectories("diffowl-action-state-");
+
+afterEach(stateDirectories.removeAll);
 
 const representativeDiff = [
   "diff --git a/src/message.ts b/src/message.ts",
@@ -147,6 +151,35 @@ it("supplies an environment credential profile to the Review engine", async () =
     }),
   );
   expect(JSON.parse(outputs.get("outcome") ?? "")).toEqual(outcome);
+});
+
+it("persists Action runs and publishes safe run outputs", async () => {
+  const stateDirectory = await stateDirectories.create();
+  const outputs = new Map<string, string>();
+
+  const invoke = () =>
+    runAction(
+      {
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: eventPath,
+        "INPUT_STATE-DIRECTORY": stateDirectory,
+      },
+      {
+        readFile,
+        readDiff: async () => representativeDiff,
+        readPolicy: async () => representativePolicy,
+        setOutput: async (name, value) => {
+          outputs.set(name, value);
+        },
+        executeRole: async (request) => emptyRoleResult(request),
+      },
+    );
+  await invoke();
+  await invoke();
+
+  expect(outputs.get("run-id")).toBeTruthy();
+  expect(JSON.parse(outputs.get("run-metadata") ?? "")).toMatchObject({ recordVersion: 1 });
+  expect(await persistedRunCount(stateDirectory)).toBe(2);
 });
 
 it("records validation as unavailable by default on unknown and self-hosted runners", async () => {

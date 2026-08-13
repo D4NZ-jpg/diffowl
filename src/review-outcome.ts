@@ -7,10 +7,23 @@ import type {
   RoleExecutionArtifact,
   VerificationContext,
 } from "./review-orchestration.js";
+import type { FindingLifecycleState } from "./review-orchestration.js";
+import type { SafeReviewOutcomeRecord } from "./review-run-record.js";
 import type { TrustClassification } from "./trust.js";
+
+export interface ReviewRunMetadata {
+  runId: string;
+  recordVersion: number;
+  outcome: SafeReviewOutcomeRecord;
+  ledgerTransitions: Array<{
+    fingerprint: string;
+    lifecycleState: FindingLifecycleState;
+  }>;
+}
 
 interface OutcomeBase {
   trust: TrustClassification;
+  run?: ReviewRunMetadata | undefined;
 }
 
 interface PullRequestOutcomeBase extends OutcomeBase {

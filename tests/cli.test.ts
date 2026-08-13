@@ -1,14 +1,18 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
 import type { RoleExecutionRequest } from "../src/review-engine.js";
+import { persistedRunCount, temporaryStateDirectories } from "./persistence-fixtures.js";
 import { completedReviewOutcome, emptyRoleResult, projectPolicy } from "./review-fixtures.js";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/pull-request.json", import.meta.url));
 const policyPath = fileURLToPath(new URL("./fixtures/project-policy.json", import.meta.url));
+const stateDirectories = temporaryStateDirectories("diffowl-cli-state-");
+
+afterEach(stateDirectories.removeAll);
 
 // The suite has one integration-style example that asserts the complete CLI contract.
 // oxlint-disable-next-line max-lines-per-function
@@ -62,5 +66,46 @@ describe("diffowl review", () => {
         },
       }),
     );
+  });
+
+  it("persists Review runs across CLI invocations", async () => {
+    const stateDirectory = await stateDirectories.create();
+    const args = [
+      "review",
+      "--input",
+      fixturePath,
+      "--policy",
+      policyPath,
+      "--state-directory",
+      stateDirectory,
+    ];
+    const outcomes: Array<Record<string, unknown>> = [];
+
+    const invoke = async () => {
+      let stdout = "";
+      expect(
+        await runCli(args, {
+          readFile,
+          stdout: (text) => {
+            stdout += text;
+          },
+          stderr: () => undefined,
+          credentialProfiles: { default: "local" },
+          executeRole: async (request) => emptyRoleResult(request),
+        }),
+      ).toBe(0);
+      outcomes.push(JSON.parse(stdout) as Record<string, unknown>);
+    };
+    await invoke();
+    await invoke();
+
+    const [first, second] = outcomes as [
+      { run: { runId: string; recordVersion: number } },
+      { run: { runId: string; recordVersion: number } },
+    ];
+    expect(first.run).toMatchObject({ recordVersion: 1 });
+    expect(second.run).toMatchObject({ recordVersion: 1 });
+    expect(first.run.runId).not.toBe(second.run.runId);
+    expect(await persistedRunCount(stateDirectory)).toBe(2);
   });
 });

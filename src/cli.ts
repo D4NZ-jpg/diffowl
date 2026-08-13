@@ -10,6 +10,7 @@ import {
   type RoleExecutionRequest,
   type RoleExecutionResult,
   type VerificationAdapter,
+  FileSystemReviewPersistenceStore,
   runReview,
 } from "./review-engine.js";
 import { classifyTrust } from "./trust.js";
@@ -50,27 +51,36 @@ function isPullRequestInput(value: unknown): value is CliPullRequestInput {
 interface CliPaths {
   input: string;
   policy: string;
+  stateDirectory?: string;
 }
 
+// oxlint-disable-next-line complexity
 function pathsFrom(args: readonly string[]): CliPaths | undefined {
+  const hasStateDirectory = args.length === 7;
   if (
-    args.length !== 5 ||
+    (args.length !== 5 && !hasStateDirectory) ||
     args[0] !== "review" ||
     args[1] !== "--input" ||
     args[3] !== "--policy" ||
+    (hasStateDirectory && args[5] !== "--state-directory") ||
     args[2] === undefined ||
-    args[4] === undefined
+    args[4] === undefined ||
+    (hasStateDirectory && args[6] === undefined)
   ) {
     return undefined;
   }
 
-  return { input: args[2], policy: args[4] };
+  return hasStateDirectory
+    ? { input: args[2], policy: args[4], stateDirectory: args[6]! }
+    : { input: args[2], policy: args[4] };
 }
 
 export async function runCli(args: readonly string[], io: CliIo = processIo): Promise<number> {
   const paths = pathsFrom(args);
   if (paths === undefined) {
-    io.stderr("Usage: diffowl review --input <pull-request.json> --policy <local-policy.json>\n");
+    io.stderr(
+      "Usage: diffowl review --input <pull-request.json> --policy <local-policy.json> [--state-directory <path>]\n",
+    );
     return 2;
   }
 
@@ -94,6 +104,10 @@ export async function runCli(args: readonly string[], io: CliIo = processIo): Pr
         credentialProfiles: io.credentialProfiles ?? { default: "local" },
         executeRole: io.executeRole,
         verificationAdapter: io.verificationAdapter ?? createHostVerificationAdapter(),
+        persistence:
+          paths.stateDirectory === undefined
+            ? undefined
+            : new FileSystemReviewPersistenceStore(paths.stateDirectory),
       },
     );
     io.stdout(`${JSON.stringify(outcome)}\n`);

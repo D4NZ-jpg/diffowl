@@ -30,6 +30,17 @@ const candidateSchema = z.object({
   location: locationSchema,
   impact: z.string().min(1),
   evidence: z.array(z.string().min(1)).min(1),
+  fingerprintContext: z
+    .object({
+      claimKind: z.string().min(1).optional(),
+      affectedArea: z.string().min(1).optional(),
+      policyOrCapability: z.string().min(1).optional(),
+      symbol: z.string().min(1).optional(),
+      api: z.string().min(1).optional(),
+      configKey: z.string().min(1).optional(),
+      behavior: z.string().min(1).optional(),
+    })
+    .optional(),
 });
 
 const advisorySchema = z.object({
@@ -94,7 +105,7 @@ const defaultPrimitives: RunCellPrimitives = {
 
 const rolePrompts: Record<ReviewRole, string> = {
   reviewer:
-    "Generate structured candidate material findings and separate non-blocking advisory suggestions. Cite only evidence available in the supplied pull-request context.",
+    "Generate structured candidate material findings and separate non-blocking advisory suggestions. Cite only evidence available in the supplied pull-request context. For each candidate provide stable fingerprint context when known: claim kind, affected area, applicable policy or capability, and symbol/API/configuration/behavior location context. Never use line numbers or provider/thread identifiers as fingerprint context.",
   challenger:
     "Challenge each candidate for false positives, weak evidence, and low materiality. Support, reject, or downgrade every candidate you can assess.",
   verifier:

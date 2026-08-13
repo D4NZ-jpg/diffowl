@@ -87,25 +87,33 @@ async function writePullRequestEvent(
   return eventPath;
 }
 
+// oxlint-disable-next-line max-lines-per-function
 describe("installable Review OWL Action", () => {
+  // oxlint-disable-next-line max-lines-per-function
   it("runs the bundled Action in a representative same-repo checkout", async () => {
     const metadata = await readFile(join(projectRoot, "action.yml"), "utf8");
     expect(metadata).toContain("using: node24");
     expect(metadata).toContain("main: dist/action/index.js");
+    expect(metadata).toContain("state-directory:");
+    expect(metadata).toContain("run-id:");
+    expect(metadata).toContain("run-metadata:");
 
     const { repository, baseSha, headSha } = await createRepresentativeRepository();
     const eventPath = await writePullRequestEvent(repository, baseSha, headSha);
     const outputPath = join(repository, "action-output");
+    const stateDirectory = join(repository, ".durable-diffowl-state");
+    const actionEnvironment = {
+      ...process.env,
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_OUTPUT: outputPath,
+      "INPUT_STATE-DIRECTORY": stateDirectory,
+      OPENAI_API_KEY: "test-openai-secret",
+      ANTHROPIC_API_KEY: "test-anthropic-secret",
+    };
     const result = await exec("node", [join(projectRoot, "dist/action/index.js")], {
       cwd: repository,
-      env: {
-        ...process.env,
-        GITHUB_EVENT_NAME: "pull_request",
-        GITHUB_EVENT_PATH: eventPath,
-        GITHUB_OUTPUT: outputPath,
-        OPENAI_API_KEY: "test-openai-secret",
-        ANTHROPIC_API_KEY: "test-anthropic-secret",
-      },
+      env: actionEnvironment,
     });
 
     const outcome = JSON.parse(result.stdout);
@@ -130,6 +138,21 @@ describe("installable Review OWL Action", () => {
         },
       },
     });
-    expect(await readFile(outputPath, "utf8")).toBe(`outcome=${JSON.stringify(outcome)}\n`);
+    const output = await readFile(outputPath, "utf8");
+    expect(output).toContain(`outcome=${JSON.stringify(outcome)}\n`);
+    expect(output).toContain(`run-id=${outcome.run.runId}\n`);
+    expect(output).toContain(`run-metadata=${JSON.stringify(outcome.run)}\n`);
+
+    await exec("node", [join(projectRoot, "dist/action/index.js")], {
+      cwd: repository,
+      env: { ...actionEnvironment, GITHUB_OUTPUT: join(repository, "second-action-output") },
+    });
+    const manifest = JSON.parse(
+      await readFile(
+        join(stateDirectory, "repositories/example/review-target/pull-requests/42/manifest.json"),
+        "utf8",
+      ),
+    ) as { runs: Record<string, string> };
+    expect(Object.keys(manifest.runs)).toHaveLength(2);
   }, 15_000);
 });

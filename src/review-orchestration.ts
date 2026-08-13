@@ -1,6 +1,7 @@
 /* oxlint-disable max-lines */
 import { minimatch } from "minimatch";
 
+import { createFindingFingerprint, type FindingFingerprint } from "./finding-fingerprint.js";
 import {
   PROJECT_POLICY_CEILINGS,
   type ProjectPolicy,
@@ -49,11 +50,22 @@ export interface CandidateLocation {
   line?: number | undefined;
 }
 
+export interface CandidateFingerprintContext {
+  claimKind?: string | undefined;
+  affectedArea?: string | undefined;
+  policyOrCapability?: string | undefined;
+  symbol?: string | undefined;
+  api?: string | undefined;
+  configKey?: string | undefined;
+  behavior?: string | undefined;
+}
+
 export interface CandidateDraft {
   summary: string;
   location: CandidateLocation;
   impact: string;
   evidence: string[];
+  fingerprintContext?: CandidateFingerprintContext | undefined;
 }
 
 export type VerificationEvidence =
@@ -87,6 +99,7 @@ export type FindingVerificationState =
   | { type: "verified_with_limitations"; explanation: string; limitations: string[] };
 
 export interface MaterialFinding {
+  fingerprint: FindingFingerprint;
   summary: string;
   location: CandidateLocation;
   impact: string;
@@ -214,10 +227,17 @@ export type RoleExecutor = (request: RoleExecutionRequest) => Promise<RoleExecut
 export type ResolvedRole = { profile: RoleProfile; credentials: DiffowlCredentials };
 export type ResolvedRoles = Record<ReviewRole, ResolvedRole>;
 
+export interface SuppressedFinding {
+  fingerprint: FindingFingerprint;
+  summary: string;
+  locationPath: string;
+}
+
 export type OrchestrationExecutionResult =
   | {
       type: "completed";
       materialFindings: MaterialFinding[];
+      suppressedFindings: SuppressedFinding[];
       advisorySuggestions: AdvisorySuggestion[];
       verification: VerificationContext;
       executionArtifacts: RoleExecutionArtifact[];
@@ -226,6 +246,7 @@ export type OrchestrationExecutionResult =
       type: "abstention";
       reason: string;
       materialFindings: MaterialFinding[];
+      suppressedFindings: SuppressedFinding[];
       advisorySuggestions: AdvisorySuggestion[];
       verification: VerificationContext;
       executionArtifacts: RoleExecutionArtifact[];
@@ -233,6 +254,7 @@ export type OrchestrationExecutionResult =
   | {
       type: "provider_failure" | "budget_limit" | "resource_limit";
       reason: string;
+      verification: VerificationContext;
       executionArtifacts: RoleExecutionArtifact[];
     };
 
@@ -360,11 +382,36 @@ function validVerifierAssessment(
 
 interface VerifiedCandidates {
   findings: MaterialFinding[];
+  suppressed: SuppressedFinding[];
   advisories: AdvisorySuggestion[];
   abstentionReasons: string[];
   unassessed: number;
 }
 
+// oxlint-disable-next-line complexity
+function candidateFingerprint(candidate: CandidateDraft): FindingFingerprint {
+  const details = candidate.fingerprintContext;
+  return createFindingFingerprint({
+    claimKind: details?.claimKind ?? "material_problem",
+    summary: candidate.summary,
+    affectedArea: details?.affectedArea ?? candidate.location.path,
+    evidenceAnchors: candidate.evidence.map((excerpt) => ({
+      kind: "candidate_evidence",
+      path: candidate.location.path,
+      excerpt,
+    })),
+    policyOrCapability: details?.policyOrCapability ?? "material_review",
+    location: {
+      path: candidate.location.path,
+      symbol: details?.symbol,
+      api: details?.api,
+      configKey: details?.configKey,
+      behavior: details?.behavior,
+    },
+  });
+}
+
+// oxlint-disable-next-line max-lines-per-function
 function verifiedCandidates(
   candidates: CandidateDraft[],
   advisories: AdvisorySuggestion[],
@@ -374,6 +421,7 @@ function verifiedCandidates(
   const catalog = new Map(context.evidenceCatalog.map((evidence) => [evidence.id, evidence]));
   const byIndex = new Map(assessments.map((assessment) => [assessment.candidateIndex, assessment]));
   const findings: MaterialFinding[] = [];
+  const suppressed: SuppressedFinding[] = [];
   const updatedAdvisories = [...advisories];
   const abstentionReasons: string[] = [];
   let unassessed = 0;
@@ -395,6 +443,15 @@ function verifiedCandidates(
       });
       return;
     }
+    const fingerprint = candidateFingerprint(candidate);
+    if (assessment.disposition === "suppress") {
+      suppressed.push({
+        fingerprint,
+        summary: candidate.summary,
+        locationPath: candidate.location.path,
+      });
+      return;
+    }
     if (assessment.disposition !== "material") return;
     const usedEvidence = assessment.evidenceIds.flatMap((id) => {
       const evidence = catalog.get(id);
@@ -403,6 +460,7 @@ function verifiedCandidates(
     if (usedEvidence.length === 0) return;
     const limitations = [...context.limitations, ...assessment.limitations];
     findings.push({
+      fingerprint,
       summary: candidate.summary,
       location: candidate.location,
       impact: candidate.impact,
@@ -418,7 +476,32 @@ function verifiedCandidates(
             },
     });
   });
-  return { findings, advisories: updatedAdvisories, abstentionReasons, unassessed };
+  const materialByFingerprint = new Map<string, MaterialFinding>();
+  for (const finding of findings) {
+    const key = finding.fingerprint.value;
+    const existing = materialByFingerprint.get(key);
+    if (existing === undefined) {
+      materialByFingerprint.set(key, finding);
+      continue;
+    }
+    const evidence = new Map(
+      [...existing.evidence, ...finding.evidence].map((item) => [JSON.stringify(item), item]),
+    );
+    existing.evidence = [...evidence.values()];
+  }
+  const suppressedByFingerprint = new Map<string, SuppressedFinding>();
+  for (const finding of suppressed) {
+    if (!materialByFingerprint.has(finding.fingerprint.value)) {
+      suppressedByFingerprint.set(finding.fingerprint.value, finding);
+    }
+  }
+  return {
+    findings: [...materialByFingerprint.values()],
+    suppressed: [...suppressedByFingerprint.values()],
+    advisories: updatedAdvisories,
+    abstentionReasons,
+    unassessed,
+  };
 }
 
 async function repositoryEvidence(
@@ -517,11 +600,13 @@ async function executeValidationCommand(
   };
 }
 
+// oxlint-disable-next-line max-lines-per-function
 async function validationEvidence(
   policy: ProjectPolicy,
   adapter: VerificationAdapter,
   allowed: boolean,
   signal: AbortSignal,
+  attemptSink: (attempt: ValidationAttempt) => void,
 ): Promise<{
   evidence: VerificationEvidence[];
   attempts: ValidationAttempt[];
@@ -540,7 +625,21 @@ async function validationEvidence(
   }
   // Commands are selected by trusted policy. Parallel execution keeps the full-review timeout effective.
   const attempts = await Promise.all(
-    commands.map((command, index) => executeValidationCommand(index, command, adapter, signal)),
+    commands.map(async (command, index) => {
+      attemptSink({
+        commandIndex: index,
+        argv: [...command.argv],
+        timeoutSeconds: command.timeoutSeconds,
+        status: "aborted",
+        stdout: "",
+        stderr: "",
+        truncated: false,
+        limitation: "Validation was aborted before a final result was recorded.",
+      });
+      const attempt = await executeValidationCommand(index, command, adapter, signal);
+      attemptSink(attempt);
+      return attempt;
+    }),
   );
   const evidence: VerificationEvidence[] = attempts.flatMap((attempt) => {
     const content = [attempt.stdout, attempt.stderr].filter(Boolean).join("\n");
@@ -576,13 +675,20 @@ async function gatherVerificationContext(
   adapter: VerificationAdapter,
   validationCommandsAllowed: boolean,
   signal: AbortSignal,
+  attemptSink: (attempt: ValidationAttempt) => void,
 ): Promise<VerificationContext> {
   const boundedDiff = truncateUtf8(
     scopedDiff(diff, policy),
     PROJECT_POLICY_CEILINGS.repositoryEvidenceBytes,
   );
   const repository = await repositoryEvidence(pullRequest, candidates, policy, adapter, signal);
-  const validation = await validationEvidence(policy, adapter, validationCommandsAllowed, signal);
+  const validation = await validationEvidence(
+    policy,
+    adapter,
+    validationCommandsAllowed,
+    signal,
+    attemptSink,
+  );
   const diffEvidence: VerificationEvidence[] =
     boundedDiff.content.length === 0
       ? []
@@ -662,6 +768,7 @@ function abstentionResult(
     type: "abstention",
     reason: [...verified.abstentionReasons, ...missingAssessment].join(" "),
     materialFindings: verified.findings,
+    suppressedFindings: verified.suppressed,
     advisorySuggestions: verified.advisories,
     verification,
     executionArtifacts,
@@ -680,6 +787,12 @@ export async function orchestrateReviewRoles(
   verificationAdapter: VerificationAdapter,
   validationCommandsAllowed: boolean,
   artifacts: RoleExecutionArtifact[] = [],
+  verification: VerificationContext = {
+    evidenceCatalog: [],
+    validationAttempts: [],
+    limitations: [],
+    coverageGaps: [],
+  },
 ): Promise<OrchestrationExecutionResult> {
   const plan = orchestrationPlan(policy);
   const state: OrchestrationState = {
@@ -688,17 +801,11 @@ export async function orchestrateReviewRoles(
     roleInput: { task: "generate candidates" },
     assessments: [],
   };
-  let verification: VerificationContext = {
-    evidenceCatalog: [],
-    validationAttempts: [],
-    limitations: [],
-    coverageGaps: [],
-  };
   for (const step of plan.steps) {
     const configuredRole = roles[step.role];
     if (step.role === "verifier") {
       // oxlint-disable-next-line no-await-in-loop
-      verification = await gatherVerificationContext(
+      const gatheredVerification = await gatherVerificationContext(
         pullRequest,
         diff,
         state.candidates,
@@ -706,7 +813,18 @@ export async function orchestrateReviewRoles(
         verificationAdapter,
         validationCommandsAllowed,
         signal,
+        (attempt) => {
+          const existing = verification.validationAttempts.findIndex(
+            ({ commandIndex }) => commandIndex === attempt.commandIndex,
+          );
+          if (existing === -1) verification.validationAttempts.push(attempt);
+          else verification.validationAttempts[existing] = attempt;
+          verification.validationAttempts.sort(
+            (left, right) => left.commandIndex - right.commandIndex,
+          );
+        },
       );
+      Object.assign(verification, gatheredVerification);
       state.roleInput = { candidateFindings: state.candidates, ...verification };
     }
     // oxlint-disable-next-line no-await-in-loop
@@ -722,13 +840,14 @@ export async function orchestrateReviewRoles(
     });
     if (result.type !== "completed") {
       if (result.artifact !== undefined) artifacts.push(result.artifact);
-      return { ...result, executionArtifacts: artifacts };
+      return { ...result, verification, executionArtifacts: artifacts };
     }
     artifacts.push(result.artifact);
     if (result.output.role !== step.role) {
       return {
         type: "provider_failure",
         reason: `Provider returned ${result.output.role} output for the ${step.role} role.`,
+        verification,
         executionArtifacts: artifacts,
       };
     }
@@ -745,6 +864,7 @@ export async function orchestrateReviewRoles(
   return {
     type: "completed",
     materialFindings: verified.findings,
+    suppressedFindings: verified.suppressed,
     advisorySuggestions: verified.advisories,
     verification,
     executionArtifacts: artifacts,
