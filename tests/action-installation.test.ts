@@ -7,26 +7,12 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { defaultRoleProfiles } from "./review-fixtures.js";
+
 const exec = promisify(execFile);
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const temporaryRepositories: string[] = [];
-const roleProfiles = {
-  reviewer: {
-    provider: "openai",
-    model: "gpt-5",
-    credentialProfile: "default",
-  },
-  challenger: {
-    provider: "anthropic",
-    model: "claude-sonnet-4-6",
-    credentialProfile: "default",
-  },
-  verifier: {
-    provider: "openai",
-    model: "gpt-5-mini",
-    credentialProfile: "default",
-  },
-};
+const roleProfiles = defaultRoleProfiles;
 
 afterEach(async () => {
   await Promise.all(

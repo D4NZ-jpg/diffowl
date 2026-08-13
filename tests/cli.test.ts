@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
 import type { RoleExecutionRequest } from "../src/review-engine.js";
-import { emptyArtifact, emptyRoleResult } from "./role-execution-fixtures.js";
+import { completedReviewOutcome, emptyRoleResult, projectPolicy } from "./review-fixtures.js";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/pull-request.json", import.meta.url));
 const policyPath = fileURLToPath(new URL("./fixtures/project-policy.json", import.meta.url));
@@ -40,79 +40,26 @@ describe("diffowl review", () => {
       step: { role: "reviewer", purpose: "generate_candidates" },
       credentials: "local",
     });
-    expect(JSON.parse(stdout)).toEqual({
-      type: "candidates_generated",
-      pullRequest: {
-        repository: "example/review-target",
-        number: 42,
-        baseSha: "1111111111111111111111111111111111111111",
-        headSha: "2222222222222222222222222222222222222222",
-      },
-      candidateFindings: [],
-      advisorySuggestions: [],
-      orchestrationPlan: {
-        maxCandidateFindings: 25,
-        steps: [
-          { role: "reviewer", purpose: "generate_candidates" },
-          { role: "challenger", purpose: "challenge_candidates" },
-          { role: "verifier", purpose: "verify_candidates" },
-        ],
-      },
-      executionArtifacts: [
-        emptyArtifact("reviewer"),
-        emptyArtifact("challenger"),
-        emptyArtifact("verifier"),
-      ],
-      verification: {
-        evidenceCatalog: [],
-        validationAttempts: [],
-        limitations: ["The configured review scope produced an empty diff."],
-      },
-      trust: {
-        class: "local_cli",
-        capabilities: {
-          validationCommands: "local_user_authorized",
-          secrets: "local_user_authorized",
-          writeTokens: "local_user_authorized",
-          privilegedTools: "local_user_authorized",
-          publishing: "denied",
-        },
-      },
-      policy: {
-        source: {
-          type: "local_invocation",
-          path: policyPath,
-        },
-        effective: {
-          version: 1,
-          scope: {
-            includePaths: ["src/**"],
-            excludePaths: ["dist/**"],
-          },
-          limits: {
-            reviewTimeoutSeconds: 600,
-            maxFindings: 25,
-          },
-          verification: { validationCommands: [] },
-          roleProfiles: {
-            reviewer: {
-              provider: "openai",
-              model: "gpt-5",
-              credentialProfile: "default",
-            },
-            challenger: {
-              provider: "anthropic",
-              model: "claude-sonnet-4-6",
-              credentialProfile: "default",
-            },
-            verifier: {
-              provider: "openai",
-              model: "gpt-5-mini",
-              credentialProfile: "default",
-            },
+    expect(JSON.parse(stdout)).toEqual(
+      completedReviewOutcome({
+        trust: {
+          class: "local_cli",
+          capabilities: {
+            validationCommands: "local_user_authorized",
+            secrets: "local_user_authorized",
+            writeTokens: "local_user_authorized",
+            privilegedTools: "local_user_authorized",
+            publishing: "denied",
           },
         },
-      },
-    });
+        policy: projectPolicy(),
+        policySource: { type: "local_invocation", path: policyPath },
+        verification: {
+          evidenceCatalog: [],
+          validationAttempts: [],
+          limitations: ["The configured review scope produced an empty diff."],
+        },
+      }),
+    );
   });
 });

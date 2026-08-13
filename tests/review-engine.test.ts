@@ -3,18 +3,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   type PullRequestInput,
-  type RoleExecutionArtifact,
   type RoleExecutionRequest,
   type RoleExecutionResult,
   runReview,
 } from "../src/review-engine.js";
-
-const reviewedPullRequest = {
-  repository: "example/review-target",
-  number: 42,
-  baseSha: "1111111111111111111111111111111111111111",
-  headSha: "2222222222222222222222222222222222222222",
-};
+import {
+  materialAssessment,
+  reviewedPullRequest,
+  roleArtifact,
+  trustedSameRepoTrust,
+  verifierResult,
+} from "./review-fixtures.js";
 
 const effectivePolicy = {
   version: 1,
@@ -51,16 +50,7 @@ const representativePullRequest: PullRequestInput = {
     "+hello owl",
     "",
   ].join("\n"),
-  trust: {
-    class: "trusted_same_repo_pull_request",
-    capabilities: {
-      validationCommands: "sandboxed",
-      secrets: "provider_credentials_only",
-      writeTokens: "denied",
-      privilegedTools: "denied",
-      publishing: "denied",
-    },
-  },
+  trust: trustedSameRepoTrust,
   policy: {
     source: {
       type: "trusted_base_branch" as const,
@@ -70,17 +60,6 @@ const representativePullRequest: PullRequestInput = {
     contents: JSON.stringify(effectivePolicy),
   },
 };
-
-function artifact(role: RoleExecutionRequest["step"]["role"]): RoleExecutionArtifact {
-  return {
-    role,
-    snapshot: { version: 1, files: [] },
-    events: [],
-    files: [],
-    sessionId: `${role}-session`,
-    finishReason: "stop",
-  };
-}
 
 function completedRole(request: RoleExecutionRequest): RoleExecutionResult {
   const role = request.step.role;
@@ -104,7 +83,7 @@ function completedRole(request: RoleExecutionRequest): RoleExecutionResult {
           },
         ],
       },
-      artifact: artifact(role),
+      artifact: roleArtifact(role),
     };
   }
   if (role === "challenger") {
@@ -114,7 +93,7 @@ function completedRole(request: RoleExecutionRequest): RoleExecutionResult {
         role,
         assessments: [{ candidateIndex: 0, verdict: "support", reason: "Material change." }],
       },
-      artifact: artifact(role),
+      artifact: roleArtifact(role),
     };
   }
   return {
@@ -131,8 +110,23 @@ function completedRole(request: RoleExecutionRequest): RoleExecutionResult {
         },
       ],
     },
-    artifact: artifact(role),
+    artifact: roleArtifact(role),
   };
+}
+
+async function reviewedDiff(diff: string): Promise<string> {
+  let reviewerDiff = "";
+  await runReview(
+    { ...representativePullRequest, diff },
+    {
+      credentialProfiles: { primary: { type: "env" } },
+      executeRole: async (request) => {
+        if (request.step.role === "reviewer") reviewerDiff = request.diff;
+        return completedRole(request);
+      },
+    },
+  );
+  return reviewerDiff;
 }
 
 // The suite keeps the complete three-role orchestration contract visible.
@@ -316,22 +310,12 @@ describe("runReview role execution", () => {
       },
       executeRole: async (request) => {
         if (request.step.role !== "verifier") return completedRole(request);
-        return {
-          type: "completed",
-          output: {
-            role: "verifier",
-            assessments: [
-              {
-                candidateIndex: 0,
-                disposition: "material",
-                evidenceIds: ["scoped-diff", "repository-file:0"],
-                explanation: "Empty evidence supposedly proves the claim.",
-                limitations: [],
-              },
-            ],
-          },
-          artifact: artifact("verifier"),
-        };
+        return verifierResult([
+          materialAssessment(
+            ["scoped-diff", "repository-file:0"],
+            "Empty evidence supposedly proves the claim.",
+          ),
+        ]);
       },
     });
 
@@ -476,22 +460,12 @@ describe("runReview role execution", () => {
       },
       executeRole: async (request) => {
         if (request.step.role !== "verifier") return completedRole(request);
-        return {
-          type: "completed",
-          output: {
-            role: "verifier",
-            assessments: [
-              {
-                candidateIndex: 0,
-                disposition: "material",
-                evidenceIds: ["validation:0"],
-                explanation: "The unavailable command supposedly proves the claim.",
-                limitations: [],
-              },
-            ],
-          },
-          artifact: artifact("verifier"),
-        };
+        return verifierResult([
+          materialAssessment(
+            ["validation:0"],
+            "The unavailable command supposedly proves the claim.",
+          ),
+        ]);
       },
     });
 
@@ -515,29 +489,16 @@ describe("runReview role execution", () => {
       credentialProfiles: { primary: { type: "env" } },
       executeRole: async (request) => {
         if (request.step.role !== "verifier") return completedRole(request);
-        return {
-          type: "completed",
-          output: {
-            role: "verifier",
-            assessments: [
-              {
-                candidateIndex: 0,
-                disposition: "material",
-                evidenceIds: ["unknown-evidence"],
-                explanation: "Unsupported material claim.",
-                limitations: [],
-              },
-              {
-                candidateIndex: 0,
-                disposition: "advisory",
-                evidenceIds: [],
-                explanation: "Worth considering but not material.",
-                limitations: [],
-              },
-            ],
+        return verifierResult([
+          materialAssessment(["unknown-evidence"], "Unsupported material claim."),
+          {
+            candidateIndex: 0,
+            disposition: "advisory",
+            evidenceIds: [],
+            explanation: "Worth considering but not material.",
+            limitations: [],
           },
-          artifact: artifact("verifier"),
-        };
+        ]);
       },
     });
 
@@ -555,39 +516,15 @@ describe("runReview role execution", () => {
   });
 
   it("includes quoted Git paths in the configured review scope", async () => {
-    let reviewerDiff = "";
-    const quotedPathInput = {
-      ...representativePullRequest,
-      diff: 'diff --git "a/src/message\\tname.ts" "b/src/message\\tname.ts"\n-old\n+new\n',
-    };
+    const diff = 'diff --git "a/src/message\\tname.ts" "b/src/message\\tname.ts"\n-old\n+new\n';
 
-    await runReview(quotedPathInput, {
-      credentialProfiles: { primary: { type: "env" } },
-      executeRole: async (request) => {
-        if (request.step.role === "reviewer") reviewerDiff = request.diff;
-        return completedRole(request);
-      },
-    });
-
-    expect(reviewerDiff).toContain('"b/src/message\\tname.ts"');
+    expect(await reviewedDiff(diff)).toContain('"b/src/message\\tname.ts"');
   });
 
   it("decodes octal-escaped UTF-8 Git paths in the configured review scope", async () => {
-    let reviewerDiff = "";
-    const quotedPathInput = {
-      ...representativePullRequest,
-      diff: 'diff --git "a/src/caf\\303\\251.ts" "b/src/caf\\303\\251.ts"\n-old\n+new\n',
-    };
+    const diff = 'diff --git "a/src/caf\\303\\251.ts" "b/src/caf\\303\\251.ts"\n-old\n+new\n';
 
-    await runReview(quotedPathInput, {
-      credentialProfiles: { primary: { type: "env" } },
-      executeRole: async (request) => {
-        if (request.step.role === "reviewer") reviewerDiff = request.diff;
-        return completedRole(request);
-      },
-    });
-
-    expect(reviewerDiff).toContain('"b/src/caf\\303\\251.ts"');
+    expect(await reviewedDiff(diff)).toContain('"b/src/caf\\303\\251.ts"');
   });
 
   it("passes a custom shared store without exposing its credential blob", async () => {

@@ -6,35 +6,20 @@ import { expect, it } from "vitest";
 
 import { runAction } from "../src/action.js";
 import type { RoleExecutionRequest } from "../src/review-engine.js";
-import { emptyArtifact, emptyRoleResult } from "./role-execution-fixtures.js";
+import {
+  completedReviewOutcome,
+  emptyRoleResult,
+  projectPolicy,
+  pullRequestEvent,
+  reviewedPullRequest,
+  trustedSameRepoTrust,
+} from "./review-fixtures.js";
 
 const eventPath = fileURLToPath(
   new URL("./fixtures/github-pull-request-event.json", import.meta.url),
 );
 
-const representativePolicy = JSON.stringify({
-  version: 1,
-  scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
-  limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
-  verification: { validationCommands: [] },
-  roleProfiles: {
-    reviewer: {
-      provider: "openai",
-      model: "gpt-5",
-      credentialProfile: "default",
-    },
-    challenger: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      credentialProfile: "default",
-    },
-    verifier: {
-      provider: "openai",
-      model: "gpt-5-mini",
-      credentialProfile: "default",
-    },
-  },
-});
+const representativePolicy = JSON.stringify(projectPolicy());
 
 const representativeDiff = [
   "diff --git a/src/message.ts b/src/message.ts",
@@ -46,6 +31,57 @@ const representativeDiff = [
   "+hello owl",
   "",
 ].join("\n");
+
+const passingValidationPolicy = JSON.stringify(
+  projectPolicy({
+    verification: {
+      validationCommands: [
+        { argv: [process.execPath, "-e", "process.stdout.write('passed')"], timeoutSeconds: 5 },
+      ],
+    },
+  }),
+);
+
+type CapturedValidation = {
+  validationAttempts?: Array<{ status: string; limitation?: string; stdout?: string }>;
+};
+
+async function validationAttemptsForRunner(
+  runnerEnvironment: string | undefined,
+): Promise<CapturedValidation["validationAttempts"]> {
+  let verifierInput: CapturedValidation | undefined;
+  await runAction(
+    {
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+      RUNNER_ENVIRONMENT: runnerEnvironment,
+    },
+    {
+      readFile,
+      readDiff: async () => representativeDiff,
+      readPolicy: async () => passingValidationPolicy,
+      setOutput: async () => undefined,
+      executeRole: async (request) => {
+        if (request.step.role === "verifier")
+          verifierInput = request.roleInput as CapturedValidation;
+        return emptyRoleResult(request);
+      },
+    },
+  );
+  return verifierInput?.validationAttempts;
+}
+
+async function actionOutcomeForEvent(event: Record<string, unknown>) {
+  return runAction(
+    { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: "event.json" },
+    {
+      readFile: async () => JSON.stringify(event),
+      readDiff: async () => representativeDiff,
+      readPolicy: async () => representativePolicy,
+      setOutput: async () => undefined,
+    },
+  );
+}
 
 // The adapter contract is intentionally asserted in one integration-style example.
 // oxlint-disable-next-line max-lines-per-function
@@ -61,12 +97,12 @@ it("supplies an environment credential profile to the Review engine", async () =
     {
       readFile,
       readDiff: async (baseSha, headSha) => {
-        expect(baseSha).toBe("1111111111111111111111111111111111111111");
-        expect(headSha).toBe("2222222222222222222222222222222222222222");
+        expect(baseSha).toBe(reviewedPullRequest.baseSha);
+        expect(headSha).toBe(reviewedPullRequest.headSha);
         return representativeDiff;
       },
       readPolicy: async (revision, path) => {
-        expect(revision).toBe("1111111111111111111111111111111111111111");
+        expect(revision).toBe(reviewedPullRequest.baseSha);
         expect(path).toBe(".diffowl.json");
         return representativePolicy;
       },
@@ -85,101 +121,35 @@ it("supplies an environment credential profile to the Review engine", async () =
     step: { role: "reviewer", purpose: "generate_candidates" },
     credentials: { type: "env" },
   });
-  expect(outcome).toEqual({
-    type: "candidates_generated",
-    pullRequest: {
-      repository: "example/review-target",
-      number: 42,
-      baseSha: "1111111111111111111111111111111111111111",
-      headSha: "2222222222222222222222222222222222222222",
-    },
-    candidateFindings: [],
-    advisorySuggestions: [],
-    orchestrationPlan: {
-      maxCandidateFindings: 25,
-      steps: [
-        { role: "reviewer", purpose: "generate_candidates" },
-        { role: "challenger", purpose: "challenge_candidates" },
-        { role: "verifier", purpose: "verify_candidates" },
-      ],
-    },
-    executionArtifacts: [
-      emptyArtifact("reviewer"),
-      emptyArtifact("challenger"),
-      emptyArtifact("verifier"),
-    ],
-    verification: {
-      evidenceCatalog: [
-        {
-          id: "scoped-diff",
-          type: "scoped_diff",
-          path: "pull-request.diff",
-          content: representativeDiff,
-          truncated: false,
-        },
-      ],
-      validationAttempts: [],
-      limitations: [],
-    },
-    trust: {
-      class: "trusted_same_repo_pull_request",
-      capabilities: {
-        validationCommands: "sandboxed",
-        secrets: "provider_credentials_only",
-        writeTokens: "denied",
-        privilegedTools: "denied",
-        publishing: "denied",
-      },
-    },
-    policy: {
-      source: {
+  expect(outcome).toEqual(
+    completedReviewOutcome({
+      trust: trustedSameRepoTrust,
+      policy: projectPolicy(),
+      policySource: {
         type: "trusted_base_branch",
-        revision: "1111111111111111111111111111111111111111",
+        revision: reviewedPullRequest.baseSha,
         path: ".diffowl.json",
       },
-      effective: JSON.parse(representativePolicy),
-    },
-  });
+      verification: {
+        evidenceCatalog: [
+          {
+            id: "scoped-diff",
+            type: "scoped_diff",
+            path: "pull-request.diff",
+            content: representativeDiff,
+            truncated: false,
+          },
+        ],
+        validationAttempts: [],
+        limitations: [],
+      },
+    }),
+  );
   expect(JSON.parse(outputs.get("outcome") ?? "")).toEqual(outcome);
 });
 
 it("records validation as unavailable by default on unknown and self-hosted runners", async () => {
-  const policy = JSON.stringify({
-    ...JSON.parse(representativePolicy),
-    verification: {
-      validationCommands: [
-        { argv: [process.execPath, "-e", "process.stdout.write('passed')"], timeoutSeconds: 5 },
-      ],
-    },
-  });
-
-  const attempts = await Promise.all(
-    [undefined, "self-hosted"].map(async (runnerEnvironment) => {
-      let verifierInput:
-        | { validationAttempts?: Array<{ status: string; limitation?: string }> }
-        | undefined;
-      await runAction(
-        {
-          GITHUB_EVENT_NAME: "pull_request",
-          GITHUB_EVENT_PATH: eventPath,
-          RUNNER_ENVIRONMENT: runnerEnvironment,
-        },
-        {
-          readFile,
-          readDiff: async () => representativeDiff,
-          readPolicy: async () => policy,
-          setOutput: async () => undefined,
-          executeRole: async (request) => {
-            if (request.step.role === "verifier") {
-              verifierInput = request.roleInput as typeof verifierInput;
-            }
-            return emptyRoleResult(request);
-          },
-        },
-      );
-      return verifierInput?.validationAttempts;
-    }),
-  );
+  const attempts = await Promise.all([undefined, "self-hosted"].map(validationAttemptsForRunner));
 
   for (const attempt of attempts) {
     expect(attempt).toEqual([
@@ -192,57 +162,16 @@ it("records validation as unavailable by default on unknown and self-hosted runn
 });
 
 it("executes configured validation by default on a GitHub-hosted runner", async () => {
-  let verifierInput: { validationAttempts?: Array<{ status: string; stdout: string }> } | undefined;
-  const policy = JSON.stringify({
-    ...JSON.parse(representativePolicy),
-    verification: {
-      validationCommands: [
-        { argv: [process.execPath, "-e", "process.stdout.write('passed')"], timeoutSeconds: 5 },
-      ],
-    },
-  });
+  const attempts = await validationAttemptsForRunner("github-hosted");
 
-  await runAction(
-    {
-      GITHUB_EVENT_NAME: "pull_request",
-      GITHUB_EVENT_PATH: eventPath,
-      RUNNER_ENVIRONMENT: "github-hosted",
-    },
-    {
-      readFile,
-      readDiff: async () => representativeDiff,
-      readPolicy: async () => policy,
-      setOutput: async () => undefined,
-      executeRole: async (request) => {
-        if (request.step.role === "verifier") {
-          verifierInput = request.roleInput as typeof verifierInput;
-        }
-        return emptyRoleResult(request);
-      },
-    },
-  );
-
-  expect(verifierInput?.validationAttempts).toEqual([
-    expect.objectContaining({ status: "passed", stdout: "passed" }),
-  ]);
+  expect(attempts).toEqual([expect.objectContaining({ status: "passed", stdout: "passed" })]);
 });
 
 it("denies risky capabilities for a fork pull request", async () => {
-  const event = {
-    repository: { full_name: "example/review-target" },
-    pull_request: {
-      number: 42,
-      base: {
-        sha: "1111111111111111111111111111111111111111",
-        repo: { full_name: "example/review-target" },
-      },
-      head: {
-        sha: "2222222222222222222222222222222222222222",
-        repo: { full_name: "contributor/review-target" },
-      },
-      user: { login: "contributor" },
-    },
-  };
+  const event = pullRequestEvent({
+    headRepository: "contributor/review-target",
+    actor: "contributor",
+  });
 
   const outcome = await runAction(
     {
@@ -276,31 +205,9 @@ it("denies risky capabilities for a fork pull request", async () => {
 });
 
 it("treats Dependabot as untrusted even when its branch is in the repository", async () => {
-  const event = {
-    repository: { full_name: "example/review-target" },
-    pull_request: {
-      number: 42,
-      base: {
-        sha: "1111111111111111111111111111111111111111",
-        repo: { full_name: "example/review-target" },
-      },
-      head: {
-        sha: "2222222222222222222222222222222222222222",
-        repo: { full_name: "example/review-target" },
-      },
-      user: { login: "dependabot[bot]" },
-    },
-  };
+  const event = pullRequestEvent({ actor: "dependabot[bot]" });
 
-  const outcome = await runAction(
-    { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: "event.json" },
-    {
-      readFile: async () => JSON.stringify(event),
-      readDiff: async () => representativeDiff,
-      readPolicy: async () => representativePolicy,
-      setOutput: async () => undefined,
-    },
-  );
+  const outcome = await actionOutcomeForEvent(event);
 
   expect(outcome).toMatchObject({
     type: "partial_coverage",
@@ -380,11 +287,11 @@ it("skips an unsafe pull-request identity before reading repository content", as
     pull_request: {
       number: 42,
       base: {
-        sha: "1111111111111111111111111111111111111111",
+        sha: reviewedPullRequest.baseSha,
         repo: { full_name: "attacker/review-target" },
       },
       head: {
-        sha: "2222222222222222222222222222222222222222",
+        sha: reviewedPullRequest.headSha,
         repo: { full_name: "attacker/review-target" },
       },
     },

@@ -25,9 +25,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings src tests scripts",
     "lint:fix": "oxlint --fix src tests scripts",
+    "duplication": "jscpd",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"
+    "check": "npm run format:check && npm run lint && npm run duplication && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "minimatch": "^10.2.6",
@@ -37,6 +38,7 @@
   "devDependencies": {
     "@types/node": "^20.19.43",
     "esbuild": "^0.28.2",
+    "jscpd": "^5.0.14",
     "oxfmt": "^0.63.0",
     "oxlint": "^1.78.0",
     "typescript": "^5.9.3",

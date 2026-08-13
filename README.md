@@ -125,4 +125,4 @@ npm test
 npm run build
 ```
 
-Run the complete CI check locally with `npm run check`. Oxlint enforces correctness, suspicious-code, performance, and cyclomatic-complexity rules. Each function is limited to a cyclomatic complexity of 10 and 60 non-blank, non-comment lines. Each file is limited to 300 non-blank, non-comment lines. Oxfmt provides deterministic formatting, and `npm run format:check` verifies it without changing files.
+Run the complete CI check locally with `npm run check`. Oxlint enforces correctness, suspicious-code, performance, and cyclomatic-complexity rules. Each function is limited to a cyclomatic complexity of 10 and 60 non-blank, non-comment lines. Each file is limited to 300 non-blank, non-comment lines. Jscpd enforces zero detected duplication across `src`, `tests`, and `scripts` for clones of at least 5 lines and 50 tokens. Oxfmt provides deterministic formatting, and `npm run format:check` verifies it without changing files.
