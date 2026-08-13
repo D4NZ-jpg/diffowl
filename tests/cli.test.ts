@@ -4,14 +4,19 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
+import type { RoleExecutionRequest } from "../src/review-engine.js";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/pull-request.json", import.meta.url));
 const policyPath = fileURLToPath(new URL("./fixtures/project-policy.json", import.meta.url));
 
+// The suite has one integration-style example that asserts the complete CLI contract.
+// oxlint-disable-next-line max-lines-per-function
 describe("diffowl review", () => {
-  it("runs the Review engine for pull-request input", async () => {
+  // oxlint-disable-next-line max-lines-per-function
+  it("supplies local credentials to the Review engine", async () => {
     let stdout = "";
     let stderr = "";
+    let execution: RoleExecutionRequest | undefined;
 
     const exitCode = await runCli(["review", "--input", fixturePath, "--policy", policyPath], {
       readFile,
@@ -21,10 +26,22 @@ describe("diffowl review", () => {
       stderr: (text) => {
         stderr += text;
       },
+      credentialProfiles: { default: "local" },
+      executeRoles: async (request) => {
+        execution = request;
+        return { type: "completed" };
+      },
     });
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
+    expect(execution).toMatchObject({
+      roles: {
+        reviewer: { credentials: "local" },
+        challenger: { credentials: "local" },
+        verifier: { credentials: "local" },
+      },
+    });
     expect(JSON.parse(stdout)).toEqual({
       type: "partial_coverage",
       pullRequest: {
@@ -58,6 +75,23 @@ describe("diffowl review", () => {
           limits: {
             reviewTimeoutSeconds: 600,
             maxFindings: 25,
+          },
+          roleProfiles: {
+            reviewer: {
+              provider: "openai",
+              model: "gpt-5",
+              credentialProfile: "default",
+            },
+            challenger: {
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+              credentialProfile: "default",
+            },
+            verifier: {
+              provider: "openai",
+              model: "gpt-5-mini",
+              credentialProfile: "default",
+            },
           },
         },
       },

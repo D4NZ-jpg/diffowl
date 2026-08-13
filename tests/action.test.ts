@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
 import { runAction } from "../src/action.js";
+import type { RoleExecutionRequest } from "../src/review-engine.js";
 
 const eventPath = fileURLToPath(
   new URL("./fixtures/github-pull-request-event.json", import.meta.url),
@@ -13,6 +14,23 @@ const representativePolicy = JSON.stringify({
   version: 1,
   scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
   limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
+  roleProfiles: {
+    reviewer: {
+      provider: "openai",
+      model: "gpt-5",
+      credentialProfile: "default",
+    },
+    challenger: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      credentialProfile: "default",
+    },
+    verifier: {
+      provider: "openai",
+      model: "gpt-5-mini",
+      credentialProfile: "default",
+    },
+  },
 });
 
 const representativeDiff = [
@@ -26,11 +44,17 @@ const representativeDiff = [
   "",
 ].join("\n");
 
-it("runs the Review engine for a same-repo pull request", async () => {
+// The adapter contract is intentionally asserted in one integration-style example.
+// oxlint-disable-next-line max-lines-per-function
+it("supplies an environment credential profile to the Review engine", async () => {
   const outputs = new Map<string, string>();
+  let execution: RoleExecutionRequest | undefined;
 
   const outcome = await runAction(
-    { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath },
+    {
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+    },
     {
       readFile,
       readDiff: async (baseSha, headSha) => {
@@ -46,9 +70,21 @@ it("runs the Review engine for a same-repo pull request", async () => {
       setOutput: async (name, value) => {
         outputs.set(name, value);
       },
+      credentialProfiles: { default: { type: "env" } },
+      executeRoles: async (request) => {
+        execution = request;
+        return { type: "completed" };
+      },
     },
   );
 
+  expect(execution).toMatchObject({
+    roles: {
+      reviewer: { credentials: { type: "env" } },
+      challenger: { credentials: { type: "env" } },
+      verifier: { credentials: { type: "env" } },
+    },
+  });
   expect(outcome).toEqual({
     type: "partial_coverage",
     pullRequest: {
@@ -62,7 +98,7 @@ it("runs the Review engine for a same-repo pull request", async () => {
       class: "trusted_same_repo_pull_request",
       capabilities: {
         validationCommands: "sandboxed",
-        secrets: "denied",
+        secrets: "provider_credentials_only",
         writeTokens: "denied",
         privilegedTools: "denied",
         publishing: "denied",

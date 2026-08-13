@@ -3,13 +3,21 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-import { type PullRequestInput, runReview } from "./review-engine.js";
+import {
+  type DiffowlCredentials,
+  type PullRequestInput,
+  type RoleExecutionRequest,
+  type RoleExecutionResult,
+  runReview,
+} from "./review-engine.js";
 import { classifyTrust } from "./trust.js";
 
 export interface CliIo {
   readFile(path: string, encoding: "utf8"): Promise<string>;
   stdout(text: string): void;
   stderr(text: string): void;
+  credentialProfiles?: Readonly<Record<string, DiffowlCredentials>>;
+  executeRoles?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
 }
 
 const processIo: CliIo = {
@@ -70,14 +78,20 @@ export async function runCli(args: readonly string[], io: CliIo = processIo): Pr
       return 2;
     }
 
-    const outcome = await runReview({
-      ...input,
-      trust: classifyTrust({ type: "local_cli" }),
-      policy: {
-        source: { type: "local_invocation", path: paths.policy },
-        contents: await io.readFile(paths.policy, "utf8"),
+    const outcome = await runReview(
+      {
+        ...input,
+        trust: classifyTrust({ type: "local_cli" }),
+        policy: {
+          source: { type: "local_invocation", path: paths.policy },
+          contents: await io.readFile(paths.policy, "utf8"),
+        },
       },
-    });
+      {
+        credentialProfiles: io.credentialProfiles ?? { default: "local" },
+        executeRoles: io.executeRoles ?? (async () => ({ type: "completed" })),
+      },
+    );
     io.stdout(`${JSON.stringify(outcome)}\n`);
     return 0;
   } catch (error) {

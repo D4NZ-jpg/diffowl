@@ -20,7 +20,11 @@ export type TrustContext =
 
 export interface TrustCapabilities {
   validationCommands: "sandboxed" | "local_user_authorized" | "denied";
-  secrets: "local_user_authorized" | "publisher_token_only" | "denied";
+  secrets:
+    | "provider_credentials_only"
+    | "local_user_authorized"
+    | "publisher_token_only"
+    | "denied";
   writeTokens: "local_user_authorized" | "publisher_token_only" | "denied";
   privilegedTools: "local_user_authorized" | "denied";
   publishing: "sha_bound_data_only" | "denied";
@@ -131,6 +135,7 @@ export function classifyTrust(context: TrustContext): TrustClassification {
     capabilities: {
       ...deniedCapabilities,
       validationCommands: "sandboxed",
+      secrets: "provider_credentials_only",
     },
   };
 }

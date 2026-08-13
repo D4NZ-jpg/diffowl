@@ -7,5 +7,22 @@
   "limits": {
     "reviewTimeoutSeconds": 600,
     "maxFindings": 25
+  },
+  "roleProfiles": {
+    "reviewer": {
+      "provider": "openai",
+      "model": "gpt-5",
+      "credentialProfile": "default"
+    },
+    "challenger": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "credentialProfile": "default"
+    },
+    "verifier": {
+      "provider": "openai",
+      "model": "gpt-5-mini",
+      "credentialProfile": "default"
+    }
   }
 }

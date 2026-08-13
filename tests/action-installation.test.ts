@@ -10,6 +10,23 @@ import { afterEach, describe, expect, it } from "vitest";
 const exec = promisify(execFile);
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 const temporaryRepositories: string[] = [];
+const roleProfiles = {
+  reviewer: {
+    provider: "openai",
+    model: "gpt-5",
+    credentialProfile: "default",
+  },
+  challenger: {
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    credentialProfile: "default",
+  },
+  verifier: {
+    provider: "openai",
+    model: "gpt-5-mini",
+    credentialProfile: "default",
+  },
+};
 
 afterEach(async () => {
   await Promise.all(
@@ -39,6 +56,7 @@ async function createRepresentativeRepository(): Promise<{
       version: 1,
       scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
       limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
+      roleProfiles,
     }),
     "utf8",
   );
@@ -52,6 +70,7 @@ async function createRepresentativeRepository(): Promise<{
       version: 1,
       scope: { includePaths: ["**"], excludePaths: [] },
       limits: { reviewTimeoutSeconds: 3_601, maxFindings: 100 },
+      roleProfiles,
     }),
     "utf8",
   );
@@ -83,7 +102,7 @@ async function writePullRequestEvent(
 describe("installable Review OWL Action", () => {
   it("runs the bundled Action in a representative same-repo checkout", async () => {
     const metadata = await readFile(join(projectRoot, "action.yml"), "utf8");
-    expect(metadata).toContain("using: node20");
+    expect(metadata).toContain("using: node24");
     expect(metadata).toContain("main: dist/action/index.js");
 
     const { repository, baseSha, headSha } = await createRepresentativeRepository();
@@ -91,7 +110,14 @@ describe("installable Review OWL Action", () => {
     const outputPath = join(repository, "action-output");
     const result = await exec("node", [join(projectRoot, "dist/action/index.js")], {
       cwd: repository,
-      env: { ...process.env, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath },
+      env: {
+        ...process.env,
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: eventPath,
+        GITHUB_OUTPUT: outputPath,
+        OPENAI_API_KEY: "test-openai-secret",
+        ANTHROPIC_API_KEY: "test-anthropic-secret",
+      },
     });
 
     const outcome = JSON.parse(result.stdout);
@@ -109,6 +135,7 @@ describe("installable Review OWL Action", () => {
           version: 1,
           scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
           limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
+          roleProfiles,
         },
       },
     });

@@ -4,5 +4,5 @@ outputs:
   outcome:
     description: The typed Review outcome as JSON.
 runs:
-  using: node20
+  using: node24
   main: dist/action/index.js
