@@ -73,13 +73,26 @@ export interface ValidationAttempt {
   limitation?: string | undefined;
 }
 
-export interface CandidateFinding extends CandidateDraft {
-  evidence: string[];
-  verification: {
-    explanation: string;
-    usedEvidence: VerificationEvidence[];
-    limitations: string[];
-  };
+export type FindingLifecycleState =
+  | "new"
+  | "persisting"
+  | "resolved"
+  | "obsolete"
+  | "rebutted"
+  | "accepted"
+  | "suppressed";
+
+export type FindingVerificationState =
+  | { type: "verified"; explanation: string; limitations: [] }
+  | { type: "verified_with_limitations"; explanation: string; limitations: string[] };
+
+export interface MaterialFinding {
+  summary: string;
+  location: CandidateLocation;
+  impact: string;
+  evidence: VerificationEvidence[];
+  lifecycleState: FindingLifecycleState;
+  verificationState: FindingVerificationState;
 }
 
 export interface AdvisorySuggestion {
@@ -131,7 +144,7 @@ export interface ChallengerAssessment {
 
 export interface VerifierAssessment {
   candidateIndex: number;
-  disposition: "material" | "advisory" | "suppress";
+  disposition: "material" | "advisory" | "suppress" | "abstain";
   evidenceIds: string[];
   explanation: string;
   limitations: string[];
@@ -150,6 +163,7 @@ export interface VerificationContext {
   evidenceCatalog: VerificationEvidence[];
   validationAttempts: ValidationAttempt[];
   limitations: string[];
+  coverageGaps: string[];
 }
 
 export interface RepositoryEvidenceRequest {
@@ -190,7 +204,7 @@ export interface RoleExecutionRequest {
 export type RoleExecutionResult =
   | { type: "completed"; output: RoleOutput; artifact: RoleExecutionArtifact }
   | {
-      type: "provider_failure" | "budget_limit";
+      type: "provider_failure" | "budget_limit" | "resource_limit";
       reason: string;
       artifact?: RoleExecutionArtifact | undefined;
     };
@@ -203,13 +217,21 @@ export type ResolvedRoles = Record<ReviewRole, ResolvedRole>;
 export type OrchestrationExecutionResult =
   | {
       type: "completed";
-      candidateFindings: CandidateFinding[];
+      materialFindings: MaterialFinding[];
       advisorySuggestions: AdvisorySuggestion[];
       verification: VerificationContext;
       executionArtifacts: RoleExecutionArtifact[];
     }
   | {
-      type: "provider_failure" | "budget_limit";
+      type: "abstention";
+      reason: string;
+      materialFindings: MaterialFinding[];
+      advisorySuggestions: AdvisorySuggestion[];
+      verification: VerificationContext;
+      executionArtifacts: RoleExecutionArtifact[];
+    }
+  | {
+      type: "provider_failure" | "budget_limit" | "resource_limit";
       reason: string;
       executionArtifacts: RoleExecutionArtifact[];
     };
@@ -336,19 +358,35 @@ function validVerifierAssessment(
   );
 }
 
+interface VerifiedCandidates {
+  findings: MaterialFinding[];
+  advisories: AdvisorySuggestion[];
+  abstentionReasons: string[];
+  unassessed: number;
+}
+
 function verifiedCandidates(
   candidates: CandidateDraft[],
   advisories: AdvisorySuggestion[],
   assessments: VerifierAssessment[],
   context: VerificationContext,
-): { findings: CandidateFinding[]; advisories: AdvisorySuggestion[] } {
+): VerifiedCandidates {
   const catalog = new Map(context.evidenceCatalog.map((evidence) => [evidence.id, evidence]));
   const byIndex = new Map(assessments.map((assessment) => [assessment.candidateIndex, assessment]));
-  const findings: CandidateFinding[] = [];
+  const findings: MaterialFinding[] = [];
   const updatedAdvisories = [...advisories];
+  const abstentionReasons: string[] = [];
+  let unassessed = 0;
   candidates.forEach((candidate, index) => {
     const assessment = byIndex.get(index);
-    if (!validVerifierAssessment(assessment)) return;
+    if (!validVerifierAssessment(assessment)) {
+      unassessed += 1;
+      return;
+    }
+    if (assessment.disposition === "abstain") {
+      abstentionReasons.push(assessment.explanation);
+      return;
+    }
     if (assessment.disposition === "advisory") {
       updatedAdvisories.push({
         summary: candidate.summary,
@@ -363,17 +401,24 @@ function verifiedCandidates(
       return evidence === undefined ? [] : [evidence];
     });
     if (usedEvidence.length === 0) return;
+    const limitations = [...context.limitations, ...assessment.limitations];
     findings.push({
-      ...candidate,
-      evidence: usedEvidence.map(({ id }) => id),
-      verification: {
-        explanation: assessment.explanation,
-        usedEvidence,
-        limitations: [...context.limitations, ...assessment.limitations],
-      },
+      summary: candidate.summary,
+      location: candidate.location,
+      impact: candidate.impact,
+      evidence: usedEvidence,
+      lifecycleState: "new",
+      verificationState:
+        limitations.length === 0
+          ? { type: "verified", explanation: assessment.explanation, limitations: [] }
+          : {
+              type: "verified_with_limitations",
+              explanation: assessment.explanation,
+              limitations,
+            },
     });
   });
-  return { findings, advisories: updatedAdvisories };
+  return { findings, advisories: updatedAdvisories, abstentionReasons, unassessed };
 }
 
 async function repositoryEvidence(
@@ -560,6 +605,7 @@ async function gatherVerificationContext(
       ...repository.limitations,
       ...validation.limitations,
     ],
+    coverageGaps: validation.limitations,
   };
 }
 
@@ -587,6 +633,41 @@ function applyRoleOutput(state: OrchestrationState, output: RoleOutput): void {
   state.assessments = output.assessments;
 }
 
+async function executeRoleSafely(
+  executeRole: RoleExecutor,
+  request: RoleExecutionRequest,
+): Promise<RoleExecutionResult> {
+  try {
+    return await executeRole(request);
+  } catch {
+    return {
+      type: "provider_failure",
+      reason: `Provider execution failed for the ${request.step.role} role.`,
+    };
+  }
+}
+
+function abstentionResult(
+  verified: VerifiedCandidates,
+  verification: VerificationContext,
+  executionArtifacts: RoleExecutionArtifact[],
+): Extract<OrchestrationExecutionResult, { type: "abstention" }> | undefined {
+  if (verified.abstentionReasons.length === 0 && verified.unassessed === 0) return undefined;
+  const noun = verified.unassessed === 1 ? "candidate" : "candidates";
+  const missingAssessment =
+    verified.unassessed === 0
+      ? []
+      : [`The verifier did not assess ${verified.unassessed} surviving ${noun}.`];
+  return {
+    type: "abstention",
+    reason: [...verified.abstentionReasons, ...missingAssessment].join(" "),
+    materialFindings: verified.findings,
+    advisorySuggestions: verified.advisories,
+    verification,
+    executionArtifacts,
+  };
+}
+
 // Roles are deliberately sequential because each consumes the prior role's output.
 // oxlint-disable-next-line max-lines-per-function, no-await-in-loop
 export async function orchestrateReviewRoles(
@@ -611,6 +692,7 @@ export async function orchestrateReviewRoles(
     evidenceCatalog: [],
     validationAttempts: [],
     limitations: [],
+    coverageGaps: [],
   };
   for (const step of plan.steps) {
     const configuredRole = roles[step.role];
@@ -628,7 +710,7 @@ export async function orchestrateReviewRoles(
       state.roleInput = { candidateFindings: state.candidates, ...verification };
     }
     // oxlint-disable-next-line no-await-in-loop
-    const result = await executeRole({
+    const result = await executeRoleSafely(executeRole, {
       pullRequest,
       diff: scopedDiff(diff, policy),
       step,
@@ -658,9 +740,11 @@ export async function orchestrateReviewRoles(
     state.assessments,
     verification,
   );
+  const abstention = abstentionResult(verified, verification, artifacts);
+  if (abstention !== undefined) return abstention;
   return {
     type: "completed",
-    candidateFindings: verified.findings,
+    materialFindings: verified.findings,
     advisorySuggestions: verified.advisories,
     verification,
     executionArtifacts: artifacts,

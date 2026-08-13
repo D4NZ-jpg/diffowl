@@ -125,9 +125,13 @@ function isPullRequestEvent(value: unknown): value is GitHubPullRequestEvent {
   );
 }
 
-async function skipUnsafeContext(io: ActionIo, reason: string): Promise<ReviewOutcome> {
+async function unsafeContextOutcome(
+  io: ActionIo,
+  type: "policy_skip" | "unsupported_change",
+  reason: string,
+): Promise<ReviewOutcome> {
   const outcome: ReviewOutcome = {
-    type: "policy_skip",
+    type,
     reason,
     trust: classifyTrust({ type: "unsupported", reason }),
   };
@@ -145,6 +149,14 @@ function actionVerificationAdapter(
     : unavailableVerificationAdapter;
 }
 
+function reviewDependencies(env: NodeJS.ProcessEnv, io: ActionIo) {
+  return {
+    credentialProfiles: io.credentialProfiles ?? { default: { type: "env" as const } },
+    executeRole: io.executeRole,
+    verificationAdapter: actionVerificationAdapter(env, io.verificationAdapter),
+  };
+}
+
 export async function runAction(
   env: NodeJS.ProcessEnv,
   io: ActionIo = createActionIo(env),
@@ -154,21 +166,27 @@ export async function runAction(
     throw new Error("GITHUB_EVENT_PATH is required.");
   }
   if (env.GITHUB_EVENT_NAME !== "pull_request") {
-    return skipUnsafeContext(
+    return unsafeContextOutcome(
       io,
+      "policy_skip",
       `GitHub event "${env.GITHUB_EVENT_NAME ?? "unknown"}" is not a safe pull_request context.`,
     );
   }
 
   const event: unknown = JSON.parse(await io.readFile(eventPath, "utf8"));
   if (!isPullRequestEvent(event)) {
-    return skipUnsafeContext(io, "The GitHub event is not a supported pull-request event.");
+    return unsafeContextOutcome(
+      io,
+      "unsupported_change",
+      "The GitHub event is not a supported pull-request event.",
+    );
   }
 
   const { pull_request: pullRequest, repository } = event;
   if (pullRequest.base.repo.full_name !== repository.full_name) {
-    return skipUnsafeContext(
+    return unsafeContextOutcome(
       io,
+      "policy_skip",
       "The pull request base repository does not match the event repository.",
     );
   }
@@ -197,11 +215,7 @@ export async function runAction(
         contents: await io.readPolicy(pullRequest.base.sha, PROJECT_POLICY_PATH),
       },
     },
-    {
-      credentialProfiles: io.credentialProfiles ?? { default: { type: "env" } },
-      executeRole: io.executeRole,
-      verificationAdapter: actionVerificationAdapter(env, io.verificationAdapter),
-    },
+    reviewDependencies(env, io),
   );
 
   await io.setOutput("outcome", JSON.stringify(outcome));

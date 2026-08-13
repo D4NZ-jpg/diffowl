@@ -75,9 +75,10 @@ export function completedReviewOutcome(options: {
   verification: VerificationContext;
 }): Record<string, unknown> {
   return {
-    type: "candidates_generated",
+    type: "clean",
     pullRequest: reviewedPullRequest,
-    candidateFindings: [],
+    coverage: "completed_permitted",
+    materialFindings: [],
     advisorySuggestions: [],
     orchestrationPlan: {
       maxCandidateFindings: 25,

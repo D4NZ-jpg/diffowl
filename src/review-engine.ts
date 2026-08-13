@@ -13,9 +13,11 @@ import {
   type RoleExecutionArtifact,
   type RoleExecutor,
   type VerificationAdapter,
+  type VerificationContext,
   orchestrateReviewRoles,
   orchestrationPlan,
 } from "./review-orchestration.js";
+import type { ReviewOutcome } from "./review-outcome.js";
 import { createRunCellRoleExecutor } from "./runcell-orchestration.js";
 import type { TrustClassification } from "./trust.js";
 
@@ -31,8 +33,10 @@ export { PROJECT_POLICY_CEILINGS, PROJECT_POLICY_PATH } from "./project-policy.j
 export type {
   AdvisorySuggestion,
   CandidateDraft,
-  CandidateFinding,
   CandidateLocation,
+  FindingLifecycleState,
+  FindingVerificationState,
+  MaterialFinding,
   ChallengerAssessment,
   DiffowlAuthBlob,
   DiffowlCredentials,
@@ -62,48 +66,13 @@ export type {
   TrustContext,
 } from "./trust.js";
 export { classifyTrust } from "./trust.js";
+export type { ReviewOutcome } from "./review-outcome.js";
 
 export interface PullRequestInput extends ReviewedPullRequest {
   diff: string;
   policy: ProjectPolicyInput;
   trust: TrustClassification;
 }
-
-interface OutcomeBase {
-  pullRequest: ReviewedPullRequest;
-  trust: TrustClassification;
-}
-
-interface ConfiguredOutcomeBase extends OutcomeBase {
-  policy: { source: PolicySource; effective: ProjectPolicy };
-}
-
-export type ReviewOutcome =
-  | { type: "policy_skip"; reason: string; trust: TrustClassification }
-  | (ConfiguredOutcomeBase & {
-      type: "candidates_generated";
-      candidateFindings: import("./review-orchestration.js").CandidateFinding[];
-      advisorySuggestions: import("./review-orchestration.js").AdvisorySuggestion[];
-      verification: import("./review-orchestration.js").VerificationContext;
-      orchestrationPlan: import("./review-orchestration.js").OrchestrationPlan;
-      executionArtifacts: RoleExecutionArtifact[];
-    })
-  | (ConfiguredOutcomeBase & { type: "partial_coverage"; reason: string })
-  | (ConfiguredOutcomeBase & {
-      type: "provider_failure" | "budget_limit";
-      reason: string;
-      executionArtifacts: RoleExecutionArtifact[];
-    })
-  | (ConfiguredOutcomeBase & {
-      type: "timeout";
-      timeoutSeconds: number;
-      executionArtifacts: RoleExecutionArtifact[];
-    })
-  | (OutcomeBase & {
-      type: "configuration_failure";
-      reason: string;
-      policySource: PolicySource;
-    });
 
 export interface ReviewDependencies {
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>> | undefined;
@@ -180,7 +149,11 @@ async function executeWithinTimeout(
   execution: () => ReturnType<typeof orchestrateReviewRoles>,
   timeoutSeconds: number,
   controller: AbortController,
-): Promise<Awaited<ReturnType<typeof orchestrateReviewRoles>> | { type: "timeout" }> {
+): Promise<
+  | Awaited<ReturnType<typeof orchestrateReviewRoles>>
+  | { type: "timeout" }
+  | { type: "internal_failure"; reason: string }
+> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<{ type: "timeout" }>((resolve) => {
     timer = setTimeout(() => {
@@ -190,15 +163,56 @@ async function executeWithinTimeout(
   });
   try {
     return await Promise.race([execution(), timeout]);
-  } catch {
+  } catch (error) {
     return {
-      type: "provider_failure",
-      reason: "Provider role execution failed.",
-      executionArtifacts: [],
+      type: "internal_failure",
+      reason: error instanceof Error ? error.message : String(error),
     };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+function incompleteCoverageReason(verification: VerificationContext): string | undefined {
+  return verification.coverageGaps.length === 0
+    ? undefined
+    : `Review coverage is partial: ${verification.coverageGaps.join(" ")}`;
+}
+
+function completedReviewOutcome(
+  configured: {
+    pullRequest: ReviewedPullRequest;
+    trust: TrustClassification;
+    policy: { source: PolicySource; effective: ProjectPolicy };
+  },
+  execution: Extract<Awaited<ReturnType<typeof orchestrateReviewRoles>>, { type: "completed" }>,
+): ReviewOutcome {
+  const reviewDetails = {
+    materialFindings: execution.materialFindings,
+    advisorySuggestions: execution.advisorySuggestions,
+    verification: execution.verification,
+    orchestrationPlan: orchestrationPlan(configured.policy.effective),
+    executionArtifacts: execution.executionArtifacts,
+  };
+  if (execution.materialFindings.length === 0) {
+    const reason = incompleteCoverageReason(execution.verification);
+    return reason === undefined
+      ? {
+          ...configured,
+          ...reviewDetails,
+          type: "clean",
+          coverage: "completed_permitted",
+          materialFindings: [],
+        }
+      : { ...configured, ...reviewDetails, type: "partial_coverage", reason };
+  }
+  const completed = { ...configured, ...reviewDetails, coverage: "completed_permitted" as const };
+  const [firstFinding, ...remainingFindings] = execution.materialFindings;
+  return {
+    ...completed,
+    type: "findings",
+    materialFindings: [firstFinding!, ...remainingFindings],
+  };
 }
 
 // The public seam keeps policy, trust, timeout, and orchestration ordering visible.
@@ -252,17 +266,11 @@ export async function runReview(
       ...configured,
       type: "timeout",
       timeoutSeconds: result.policy.limits.reviewTimeoutSeconds,
-      executionArtifacts,
+      executionArtifacts: [...executionArtifacts],
     };
   }
-  if (execution.type !== "completed") return { ...configured, ...execution };
-  return {
-    ...configured,
-    type: "candidates_generated",
-    candidateFindings: execution.candidateFindings,
-    advisorySuggestions: execution.advisorySuggestions,
-    verification: execution.verification,
-    orchestrationPlan: orchestrationPlan(result.policy),
-    executionArtifacts: execution.executionArtifacts,
-  };
+  if (execution.type === "internal_failure") return { ...configured, ...execution };
+  return execution.type === "completed"
+    ? completedReviewOutcome(configured, execution)
+    : { ...configured, ...execution };
 }

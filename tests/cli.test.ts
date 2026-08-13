@@ -58,6 +58,7 @@ describe("diffowl review", () => {
           evidenceCatalog: [],
           validationAttempts: [],
           limitations: ["The configured review scope produced an empty diff."],
+          coverageGaps: [],
         },
       }),
     );

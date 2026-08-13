@@ -3,7 +3,7 @@
 Diffowl is a self-hostable pull-request review system. Review OWL runs an evidence-backed first pass so a person can focus on product judgment and material findings.
 
 > [!NOTE]
-> This repository currently contains the tracer path from issue #17. It proves that the GitHub Action and local CLI use the same Review engine. The tracer reports `partial_coverage` because review analysis is not implemented yet.
+> This repository is under active V1 development. The GitHub Action and local CLI use the same Review engine and return the same typed outcome contract.
 
 ## GitHub Action
 
@@ -40,6 +40,10 @@ The Action reads `.diffowl.json` from the pull request's base commit. It never r
 Same-repository pull requests may use only the trusted credential profiles referenced by base-branch role profiles. The repository policy names profiles but does not contain secrets or grant secret-store access. The Action maps `default` to RunCell environment credentials by default. They are also eligible for configured validation commands only within the externally isolated GitHub job and the policy timeout. Fork and Dependabot pull requests are untrusted: validation commands, secrets, write tokens, privileged tools, and publishing are denied. They receive a `partial_coverage` outcome while the tracer can perform only static review. Unsupported or unsafe event contexts receive a `policy_skip`; invalid, missing, over-budget, or security-weakening policy receives a `configuration_failure`. None of these cases can appear clean.
 
 The engine returns data only; GitHub publication remains the responsibility of an adapter. A future privileged publisher must use the separate SHA-bound, data-only capability class and cannot execute pull-request code.
+
+Completed reviews return either `clean` or `findings` with `coverage: "completed_permitted"`. `clean` means the completed permitted review found no material findings; it is not proof of correctness. Material findings and non-blocking `advisorySuggestions` use separate fields. Each material finding includes its location, impact, evidence objects, lifecycle state, and verification state.
+
+Non-clean runs remain explicit through `findings`, `partial_coverage`, `policy_skip`, `unsupported_change`, `budget_limit`, `resource_limit`, `timeout`, `provider_failure`, `configuration_failure`, `internal_failure`, or `abstention`. These outcomes cannot be serialized as clean reviews.
 
 A complete example is in [`examples/representative-repository`](examples/representative-repository).
 

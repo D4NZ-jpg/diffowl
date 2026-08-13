@@ -5,9 +5,11 @@ import {
   type PullRequestInput,
   type RoleExecutionRequest,
   type RoleExecutionResult,
+  type VerificationAdapter,
   runReview,
 } from "../src/review-engine.js";
 import {
+  emptyRoleResult,
   materialAssessment,
   reviewedPullRequest,
   roleArtifact,
@@ -31,6 +33,17 @@ const effectivePolicy = {
     },
     verifier: { provider: "openai", model: "gpt-5-mini", credentialProfile: "primary" },
   },
+};
+
+const passingVerificationAdapter: VerificationAdapter = {
+  readRepositoryFile: async () => undefined,
+  executeValidation: async () => ({
+    status: "passed",
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+    truncated: false,
+  }),
 };
 
 const representativePullRequest: PullRequestInput = {
@@ -60,6 +73,19 @@ const representativePullRequest: PullRequestInput = {
     contents: JSON.stringify(effectivePolicy),
   },
 };
+
+function validationDeniedPullRequest(): PullRequestInput {
+  return {
+    ...representativePullRequest,
+    trust: {
+      class: "trusted_same_repo_pull_request",
+      capabilities: {
+        ...representativePullRequest.trust.capabilities,
+        validationCommands: "denied",
+      },
+    },
+  };
+}
 
 function completedRole(request: RoleExecutionRequest): RoleExecutionResult {
   const role = request.step.role;
@@ -157,12 +183,18 @@ describe("runReview role execution", () => {
     expect(executions[0]?.diff).toContain("src/message.ts");
     expect(executions[0]?.diff).not.toContain("dist/message.js");
     expect(outcome).toMatchObject({
-      type: "candidates_generated",
-      candidateFindings: [
+      type: "findings",
+      coverage: "completed_permitted",
+      materialFindings: [
         {
           summary: "Greeting changes the public output",
-          verification: {
-            usedEvidence: [{ id: "scoped-diff", type: "scoped_diff" }],
+          location: { path: "src/message.ts", line: 1 },
+          impact: "Consumers receive a different value.",
+          evidence: [{ id: "scoped-diff", type: "scoped_diff" }],
+          lifecycleState: "new",
+          verificationState: {
+            type: "verified_with_limitations",
+            explanation: "The scoped diff demonstrates the changed output.",
             limitations: expect.arrayContaining(["Consumer call sites were not inspected."]),
           },
         },
@@ -235,7 +267,7 @@ describe("runReview role execution", () => {
       validationAttempts: [{ status: "passed", argv: ["npm", "test"] }],
     });
     expect(outcome).toMatchObject({
-      type: "candidates_generated",
+      type: "findings",
       verification: {
         evidenceCatalog: [
           { id: "scoped-diff" },
@@ -285,7 +317,7 @@ describe("runReview role execution", () => {
       "dist/model-supplied.js",
     );
     expect(outcome).toMatchObject({
-      type: "candidates_generated",
+      type: "findings",
       verification: {
         limitations: expect.arrayContaining([
           "Repository evidence was not read for out-of-scope path dist/model-supplied.js.",
@@ -299,14 +331,8 @@ describe("runReview role execution", () => {
     const outcome = await runReview(emptyDiffInput, {
       credentialProfiles: { primary: { type: "env" } },
       verificationAdapter: {
+        ...passingVerificationAdapter,
         readRepositoryFile: async () => ({ content: "", truncated: false }),
-        executeValidation: async () => ({
-          status: "passed",
-          exitCode: 0,
-          stdout: "",
-          stderr: "",
-          truncated: false,
-        }),
       },
       executeRole: async (request) => {
         if (request.step.role !== "verifier") return completedRole(request);
@@ -320,8 +346,8 @@ describe("runReview role execution", () => {
     });
 
     expect(outcome).toMatchObject({
-      type: "candidates_generated",
-      candidateFindings: [],
+      type: "clean",
+      advisorySuggestions: [{ summary: "Document the greeting change" }],
       verification: {
         evidenceCatalog: [],
         limitations: expect.arrayContaining([
@@ -408,40 +434,41 @@ describe("runReview role execution", () => {
   it("does not execute configured validation commands when the trust class denies them", async () => {
     let commandExecuted = false;
     let verifierInput: unknown;
-    const outcome = await runReview(
-      {
-        ...representativePullRequest,
-        trust: {
-          class: "trusted_same_repo_pull_request",
-          capabilities: {
-            ...representativePullRequest.trust.capabilities,
-            validationCommands: "denied",
-          },
+    const outcome = await runReview(validationDeniedPullRequest(), {
+      credentialProfiles: { primary: { type: "env" } },
+      verificationAdapter: {
+        readRepositoryFile: async () => undefined,
+        executeValidation: async () => {
+          commandExecuted = true;
+          throw new Error("must not execute");
         },
       },
-      {
-        credentialProfiles: { primary: { type: "env" } },
-        verificationAdapter: {
-          readRepositoryFile: async () => undefined,
-          executeValidation: async () => {
-            commandExecuted = true;
-            throw new Error("must not execute");
-          },
-        },
-        executeRole: async (request) => {
-          if (request.step.role === "verifier") verifierInput = request.roleInput;
-          return completedRole(request);
-        },
+      executeRole: async (request) => {
+        if (request.step.role === "verifier") verifierInput = request.roleInput;
+        return completedRole(request);
       },
-    );
+    });
 
-    expect(outcome.type).toBe("candidates_generated");
+    expect(outcome.type).toBe("findings");
     expect(commandExecuted).toBe(false);
     expect(verifierInput).toMatchObject({
       validationAttempts: [],
       limitations: expect.arrayContaining([
         "Configured validation commands were denied by the trust class.",
       ]),
+    });
+  });
+
+  it("reports partial coverage when trust restrictions deny configured validation", async () => {
+    const outcome = await runReview(validationDeniedPullRequest(), {
+      credentialProfiles: { primary: { type: "env" } },
+      executeRole: async (request) => emptyRoleResult(request),
+    });
+
+    expect(outcome).toMatchObject({
+      type: "partial_coverage",
+      reason:
+        "Review coverage is partial: Configured validation commands were denied by the trust class.",
     });
   });
 
@@ -470,16 +497,19 @@ describe("runReview role execution", () => {
     });
 
     expect(outcome).toMatchObject({
-      type: "candidates_generated",
-      candidateFindings: [],
+      type: "partial_coverage",
+      advisorySuggestions: [{ summary: "Document the greeting change" }],
       verification: {
         validationAttempts: [{ status: "error" }],
         limitations: expect.arrayContaining(["Validation execution is unavailable."]),
       },
     });
+    expect(outcome.type === "partial_coverage" ? outcome.reason : "").toContain(
+      "Validation execution is unavailable.",
+    );
     expect(
-      outcome.type === "candidates_generated"
-        ? outcome.verification.evidenceCatalog.map(({ id }) => id)
+      outcome.type === "partial_coverage"
+        ? outcome.verification?.evidenceCatalog.map(({ id }) => id)
         : [],
     ).not.toContain("validation:0");
   });
@@ -487,6 +517,7 @@ describe("runReview role execution", () => {
   it("suppresses evidence-free material assessments and downgrades advisory dispositions", async () => {
     const outcome = await runReview(representativePullRequest, {
       credentialProfiles: { primary: { type: "env" } },
+      verificationAdapter: passingVerificationAdapter,
       executeRole: async (request) => {
         if (request.step.role !== "verifier") return completedRole(request);
         return verifierResult([
@@ -503,8 +534,9 @@ describe("runReview role execution", () => {
     });
 
     expect(outcome).toMatchObject({
-      type: "candidates_generated",
-      candidateFindings: [],
+      type: "clean",
+      coverage: "completed_permitted",
+      materialFindings: [],
       advisorySuggestions: [
         { summary: "Document the greeting change" },
         {
@@ -512,6 +544,30 @@ describe("runReview role execution", () => {
           rationale: "Worth considering but not material.",
         },
       ],
+    });
+  });
+
+  it("abstains instead of appearing clean when a surviving candidate is not assessed", async () => {
+    const outcome = await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      executeRole: async (request) =>
+        request.step.role === "verifier"
+          ? verifierResult([
+              {
+                candidateIndex: 0,
+                disposition: "abstain",
+                evidenceIds: [],
+                explanation: "Repository evidence is insufficient to judge the candidate.",
+                limitations: ["The affected call sites were unavailable."],
+              },
+            ])
+          : completedRole(request),
+    });
+
+    expect(outcome).toMatchObject({
+      type: "abstention",
+      reason: "Repository evidence is insufficient to judge the candidate.",
+      advisorySuggestions: [{ summary: "Document the greeting change" }],
     });
   });
 
@@ -553,7 +609,23 @@ describe("runReview role execution", () => {
 
     expect(outcome).toMatchObject({
       type: "provider_failure",
-      reason: "Provider role execution failed.",
+      reason: "Provider execution failed for the reviewer role.",
+      executionArtifacts: [],
+    });
+  });
+
+  it("returns a typed resource-limit outcome from role execution", async () => {
+    const outcome = await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      executeRole: async () => ({
+        type: "resource_limit",
+        reason: "provider context exceeded the resource ceiling",
+      }),
+    });
+
+    expect(outcome).toMatchObject({
+      type: "resource_limit",
+      reason: "provider context exceeded the resource ceiling",
       executionArtifacts: [],
     });
   });
@@ -585,6 +657,7 @@ describe("runReview budget enforcement", () => {
       },
     };
     let signal: AbortSignal | undefined;
+    let finishLateExecution: (() => void) | undefined;
 
     const outcome = await runReview(
       {
@@ -600,7 +673,9 @@ describe("runReview budget enforcement", () => {
           signal = request.signal;
           return request.step.role === "reviewer"
             ? completedRole(request)
-            : new Promise(() => undefined);
+            : new Promise((resolve) => {
+                finishLateExecution = () => resolve(completedRole(request));
+              });
         },
       },
     );
@@ -611,6 +686,12 @@ describe("runReview budget enforcement", () => {
       executionArtifacts: [{ role: "reviewer" }],
     });
     expect(signal?.aborted).toBe(true);
+    expect(outcome.type).toBe("timeout");
+    if (outcome.type !== "timeout") throw new Error("Expected timeout outcome.");
+    const returnedArtifacts = [...outcome.executionArtifacts];
+    finishLateExecution?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(outcome.executionArtifacts).toEqual(returnedArtifacts);
   });
 
   it("fails configuration when a referenced credential profile is missing", async () => {

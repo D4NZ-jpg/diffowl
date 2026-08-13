@@ -142,6 +142,7 @@ it("supplies an environment credential profile to the Review engine", async () =
         ],
         validationAttempts: [],
         limitations: [],
+        coverageGaps: [],
       },
     }),
   );
@@ -239,7 +240,7 @@ it("skips pull_request_target before reading the event payload", async () => {
   });
 });
 
-it("skips unsupported events before reading repository content", async () => {
+it("reports unsupported pull-request shapes before reading repository content", async () => {
   let repositoryRead = false;
   let output = "";
 
@@ -263,7 +264,7 @@ it("skips unsupported events before reading repository content", async () => {
 
   expect(repositoryRead).toBe(false);
   expect(outcome).toEqual({
-    type: "policy_skip",
+    type: "unsupported_change",
     reason: "The GitHub event is not a supported pull-request event.",
     trust: {
       class: "unsafe_or_unsupported",

@@ -57,7 +57,7 @@ const verifierOutputSchema = z.object({
   assessments: z.array(
     z.object({
       candidateIndex: z.number().int().nonnegative(),
-      disposition: z.enum(["material", "advisory", "suppress"]),
+      disposition: z.enum(["material", "advisory", "suppress", "abstain"]),
       evidenceIds: z.array(z.string().min(1)),
       explanation: z.string().min(1),
       limitations: z.array(z.string().min(1)),
@@ -98,7 +98,7 @@ const rolePrompts: Record<ReviewRole, string> = {
   challenger:
     "Challenge each candidate for false positives, weak evidence, and low materiality. Support, reject, or downgrade every candidate you can assess.",
   verifier:
-    "Verify the surviving candidates using only the engine-generated evidence catalog and validation attempts. Model agreement is not verification. Disposition each candidate as material, advisory, or suppress; cite catalog evidence IDs and state explicit limitations.",
+    "Verify the surviving candidates using only the engine-generated evidence catalog and validation attempts. Model agreement is not verification. Disposition each candidate as material, advisory, suppress, or abstain when evidence is insufficient to judge; cite catalog evidence IDs and state explicit limitations.",
 };
 
 function runEvents(): {
