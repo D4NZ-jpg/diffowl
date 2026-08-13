@@ -192,7 +192,10 @@ it("publishes and reports adapter-owned receipts when a publisher is injected", 
       publishOutcome: async (target, outcome, authorization) => {
         calls.push(target);
         expect(outcome.type).toBe("clean");
-        expect(authorization).toEqual({ sourceRunVerified: true });
+        expect(authorization).toEqual({
+          sourceRunVerified: true,
+          surfaces: ["pull_request_review", "check_run", "summary_comment"],
+        });
         return {
           headSha: target.headSha,
           checkRunId: 1,
@@ -227,6 +230,26 @@ it("removes GITHUB_TOKEN from the engine environment while retaining a publisher
   const io = createActionIo(env);
   expect(env.GITHUB_TOKEN).toBeUndefined();
   expect(io.publishOutcome).toBeTypeOf("function");
+});
+
+it("reports publication denial as a non-clean outcome", async () => {
+  const outputs = new Map<string, string>();
+  await expect(
+    runAction(
+      { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath },
+      {
+        ...capturingActionIo(outputs),
+        publishOutcome: async () => {
+          throw new Error("Refusing to publish an invalid, oversized, or stale Review outcome.");
+        },
+      },
+    ),
+  ).rejects.toThrow("Refusing to publish");
+  expect(JSON.parse(outputs.get("outcome") ?? "{}")).toMatchObject({
+    type: "internal_failure",
+    reason: "Refusing to publish an invalid, oversized, or stale Review outcome.",
+  });
+  expect(outputs.has("publication")).toBe(false);
 });
 
 it("does not publish when no publisher is configured", async () => {

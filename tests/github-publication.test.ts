@@ -29,7 +29,10 @@ const target = {
   changedLines: [{ path: "src/handler.ts", line: 7 }],
 };
 
-const authorization = { sourceRunVerified: true };
+const authorization = {
+  sourceRunVerified: true,
+  surfaces: ["pull_request_review", "check_run", "summary_comment"] as const,
+};
 type IssueCommentPage = Array<{
   id: number;
   body: string;
@@ -589,7 +592,8 @@ function publicationAdapterTests(): void {
   it("requires explicit source-run provenance and valid runtime data", async () => {
     for (const [reviewOutcome, provenance] of [
       [outcome("clean"), undefined],
-      [outcome("clean"), { sourceRunVerified: false }],
+      [outcome("clean"), { ...authorization, sourceRunVerified: false }],
+      [outcome("clean"), { ...authorization, surfaces: ["check_run", "summary_comment"] }],
       [{ type: "findings", trust: trustedSameRepoTrust, materialFindings: [{}] }, authorization],
     ] as const) {
       const { requests, transport } = fakeTransport();

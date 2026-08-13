@@ -33,8 +33,15 @@ export interface PublicationTarget {
   headSha: string;
   changedLines: ReadonlyArray<{ path: string; line: number }>;
 }
+export type PublicationSurface = "pull_request_review" | "check_run" | "summary_comment";
+export const REQUIRED_PUBLICATION_SURFACES: readonly PublicationSurface[] = [
+  "pull_request_review",
+  "check_run",
+  "summary_comment",
+];
 export interface PublicationAuthorization {
   sourceRunVerified: boolean;
+  surfaces: readonly PublicationSurface[];
 }
 export interface PublicationReceipt {
   headSha: string;
