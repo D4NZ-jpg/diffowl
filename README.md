@@ -70,6 +70,8 @@ node dist/cli.js review \
 
 The optional `--state-directory` stores per-repository, per-pull-request ledger and run-record data on the local filesystem. Reusing the same directory across invocations reconciles Finding lifecycle without any hosted database. The directory is permission-restricted by Diffowl and should remain private, trusted, and backed up according to the team's audit requirements. Omitting it preserves stateless CLI behavior.
 
+The CLI emits a local inspection report as JSON. The report includes the typed Review outcome, material Findings, advisory suggestions, verification state, diagnostics, and, when `--state-directory` is configured, the persisted run record and current Finding ledger. `--dry-run` is the default. `--publish` records an explicit publishing request in the local report, but local CLI trust still denies GitHub publication.
+
 The CLI reads the policy path supplied by the local user and maps `default` to RunCell's local credentials, reusing supported Codex or Claude logins on the user's machine. Its outcome uses the `local_cli` Trust class and marks local credentials, tools, and validation as `local_user_authorized`. Publishing remains denied. Local policy execution is not CI trust evidence.
 
 The pull-request input file has this shape:
