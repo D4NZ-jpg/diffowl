@@ -291,6 +291,40 @@ describe("runReview persistence integration", () => {
     ).toBe("persisting");
   });
 
+  it("applies audited author discussion events to the persisted lifecycle", async () => {
+    const store = new MemoryPersistence();
+    const first = await runReview(input(1), {
+      ...dependencies(store, "run-discussion-discovered"),
+      executeRole: findingRoles(),
+    });
+    const fingerprint =
+      first.type === "findings" ? first.materialFindings[0].fingerprint.value : "";
+    await runReview(input(2), {
+      ...dependencies(store, "run-discussion-resolved"),
+      executeRole: async (request) => emptyRoleResult(request),
+      resolvedFingerprints: [fingerprint],
+      findingDiscussionEvents: [
+        {
+          id: "comment-1",
+          fingerprint,
+          actor: "author",
+          command: "resolved",
+          body: "fixed and ready to recheck",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          source: "pull_request_review_thread",
+        },
+      ],
+    });
+
+    expect(store.ledger?.entries[0]).toMatchObject({
+      lifecycleState: "resolved",
+      discussion: [expect.objectContaining({ command: "resolved", actor: "author" })],
+    });
+    expect(store.records.at(-1)?.finalOutcome.ledgerTransitions).toEqual([
+      expect.objectContaining({ lifecycleState: "resolved", changed: true }),
+    ]);
+  });
+
   it("deduplicates semantically identical material and suppressed candidates", async () => {
     const store = new MemoryPersistence();
     const outcome = await runReview(input(5), {

@@ -1,9 +1,15 @@
 import { isJsonObject, requireJsonVersion } from "./canonical-json.js";
+import {
+  parseFindingDiscussionEvent,
+  type FindingDiscussionCommand,
+  type FindingDiscussionEvent,
+} from "./finding-discussion.js";
 import type { FindingLifecycleState } from "./review-orchestration.js";
 
 export const FINDING_LEDGER_VERSION = 1;
 
 export type FindingDispositionState = "accepted" | "rebutted" | "suppressed";
+export type { FindingDiscussionCommand, FindingDiscussionEvent };
 export type ReviewCompletion = "completed_permitted" | "incomplete";
 
 export interface LedgerFindingSnapshot {
@@ -19,6 +25,7 @@ export interface FindingLedgerEntry extends LedgerFindingSnapshot {
   lastSeenRunId?: string | undefined;
   resolvedAtRunId?: string | undefined;
   obsoleteAtRunId?: string | undefined;
+  discussion?: FindingDiscussionEvent[] | undefined;
 }
 
 export interface FindingLedger {
@@ -34,7 +41,9 @@ export interface FindingLedgerReconciliationInput {
   suppressedFindings?: LedgerFindingSnapshot[] | undefined;
   dispositions?: Readonly<Record<string, FindingDispositionState>> | undefined;
   obsoleteFingerprints?: readonly string[] | undefined;
+  resolvedFingerprints?: readonly string[] | undefined;
   reassessments?: readonly string[] | undefined;
+  discussionEvents?: readonly FindingDiscussionEvent[] | undefined;
 }
 
 const lifecycleStates = new Set<FindingLifecycleState>([
@@ -101,6 +110,7 @@ function transition(
   previous: FindingLedgerEntry,
   lifecycleState: FindingLifecycleState,
   runId: string,
+  discussion?: FindingDiscussionEvent[],
 ): FindingLedgerEntry {
   const changed = lifecycleState !== previous.lifecycleState;
   return {
@@ -109,6 +119,7 @@ function transition(
     lastChangedRunId: changed ? runId : previous.lastChangedRunId,
     resolvedAtRunId: lifecycleState === "resolved" && changed ? runId : previous.resolvedAtRunId,
     obsoleteAtRunId: lifecycleState === "obsolete" && changed ? runId : previous.obsoleteAtRunId,
+    ...(discussion === undefined ? {} : { discussion }),
   };
 }
 
@@ -126,7 +137,7 @@ function observedEntry(
     lastChangedRunId: runId,
   };
   return {
-    ...transition({ ...base, ...current }, lifecycleState, runId),
+    ...transition({ ...base, ...current }, lifecycleState, runId, previous?.discussion),
     lastSeenRunId: runId,
   };
 }
@@ -141,6 +152,44 @@ function assertUniqueSnapshots(snapshots: readonly LedgerFindingSnapshot[], noun
   }
 }
 
+function discussionByFingerprint(
+  events: readonly FindingDiscussionEvent[],
+): Map<string, FindingDiscussionEvent[]> {
+  const byFinding = new Map<string, FindingDiscussionEvent[]>();
+  for (const event of events) {
+    const prior = byFinding.get(event.fingerprint) ?? [];
+    byFinding.set(event.fingerprint, [...prior, event]);
+  }
+  return byFinding;
+}
+
+function appendedDiscussion(
+  entry: FindingLedgerEntry,
+  events: FindingDiscussionEvent[] | undefined,
+): FindingDiscussionEvent[] | undefined {
+  if (events === undefined || events.length === 0) return entry.discussion;
+  const existing = entry.discussion ?? [];
+  const ids = new Set(existing.map((event) => event.id));
+  return [...existing, ...events.filter((event) => !ids.has(event.id))];
+}
+
+function unobservedEntry(
+  entry: FindingLedgerEntry,
+  input: FindingLedgerReconciliationInput,
+  obsolete: ReadonlySet<string>,
+  resolved: ReadonlySet<string>,
+): FindingLedgerEntry {
+  const disposition = input.dispositions?.[entry.fingerprint];
+  if (disposition !== undefined) return transition(entry, disposition, input.runId);
+  if (resolved.has(entry.fingerprint)) return transition(entry, "resolved", input.runId);
+  if (obsolete.has(entry.fingerprint)) return transition(entry, "obsolete", input.runId);
+  const active = entry.lifecycleState === "new" || entry.lifecycleState === "persisting";
+  const reassessing = input.reassessments?.includes(entry.fingerprint) === true;
+  return input.completion === "completed_permitted" && (active || reassessing)
+    ? transition(entry, "resolved", input.runId)
+    : entry;
+}
+
 // oxlint-disable-next-line complexity
 export function reconcileFindingLedger(input: FindingLedgerReconciliationInput): FindingLedger {
   if (input.runId.length === 0) throw new Error("Finding ledger run id must not be empty.");
@@ -151,6 +200,8 @@ export function reconcileFindingLedger(input: FindingLedgerReconciliationInput):
   const next = new Map<string, FindingLedgerEntry>();
   const reassessments = new Set(input.reassessments ?? []);
   const obsolete = new Set(input.obsoleteFingerprints ?? []);
+  const resolved = new Set(input.resolvedFingerprints ?? []);
+  const discussion = discussionByFingerprint(input.discussionEvents ?? []);
   const suppressed = new Map(
     (input.suppressedFindings ?? []).map((snapshot) => [snapshot.fingerprint, snapshot]),
   );
@@ -182,19 +233,14 @@ export function reconcileFindingLedger(input: FindingLedgerReconciliationInput):
   }
 
   for (const entry of previous.values()) {
-    if (next.has(entry.fingerprint)) continue;
-    const disposition = input.dispositions?.[entry.fingerprint];
-    if (disposition !== undefined) {
-      next.set(entry.fingerprint, transition(entry, disposition, input.runId));
-    } else if (obsolete.has(entry.fingerprint)) {
-      next.set(entry.fingerprint, transition(entry, "obsolete", input.runId));
-    } else if (
-      input.completion === "completed_permitted" &&
-      (entry.lifecycleState === "new" || entry.lifecycleState === "persisting")
-    ) {
-      next.set(entry.fingerprint, transition(entry, "resolved", input.runId));
-    } else {
-      next.set(entry.fingerprint, entry);
+    if (!next.has(entry.fingerprint)) {
+      next.set(entry.fingerprint, unobservedEntry(entry, input, obsolete, resolved));
+    }
+  }
+  for (const [fingerprint, events] of discussion) {
+    const entry = next.get(fingerprint);
+    if (entry !== undefined) {
+      next.set(fingerprint, { ...entry, discussion: appendedDiscussion(entry, events) });
     }
   }
   return { version: FINDING_LEDGER_VERSION, entries: [...next.values()] };
@@ -202,6 +248,12 @@ export function reconcileFindingLedger(input: FindingLedgerReconciliationInput):
 
 function optionalString(value: unknown): value is string | undefined {
   return value === undefined || (typeof value === "string" && value.length > 0);
+}
+
+function parseDiscussion(value: unknown): FindingDiscussionEvent[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error("Finding discussion must be an array.");
+  return value.map(parseFindingDiscussionEvent);
 }
 
 // oxlint-disable-next-line complexity
@@ -223,7 +275,10 @@ function parseEntry(value: unknown): FindingLedgerEntry {
   ) {
     throw new Error("Finding ledger entry is invalid.");
   }
-  return value as unknown as FindingLedgerEntry;
+  return {
+    ...(value as unknown as FindingLedgerEntry),
+    discussion: parseDiscussion(value.discussion),
+  };
 }
 
 export function parseFindingLedger(value: unknown): FindingLedger {

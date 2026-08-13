@@ -172,6 +172,46 @@ it("reassesses manual dispositions only when explicitly requested", () => {
     "persisting",
     "persisting",
   ]);
+
+  const resolved = reconcileFindingLedger({
+    previous,
+    runId: "run-4",
+    completion: "completed_permitted",
+    materialFindings: [],
+    reassessments: ["accepted", "rebutted", "suppressed"],
+  });
+  expect(resolved.entries.map((entry) => entry.lifecycleState)).toEqual([
+    "resolved",
+    "resolved",
+    "resolved",
+  ]);
+});
+
+it("records audited discussion events and resolved author dispositions", () => {
+  const next = reconcileFindingLedger({
+    previous: ledger([activeEntry("a")]),
+    runId: "run-2",
+    completion: "incomplete",
+    materialFindings: [],
+    resolvedFingerprints: ["a"],
+    discussionEvents: [
+      {
+        id: "comment-1",
+        fingerprint: "a",
+        actor: "author",
+        command: "resolved",
+        body: "fixed in the latest push",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+
+  expect(next.entries[0]).toMatchObject({
+    lifecycleState: "resolved",
+    discussion: [
+      expect.objectContaining({ command: "resolved", body: "fixed in the latest push" }),
+    ],
+  });
 });
 
 it("rejects corrupt ledgers", () => {

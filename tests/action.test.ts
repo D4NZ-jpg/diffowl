@@ -5,15 +5,18 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
 import { createActionIo, runAction } from "../src/action.js";
-import type { RoleExecutionRequest } from "../src/review-engine.js";
+import { findingIdentityMarker, type RoleExecutionRequest } from "../src/review-engine.js";
 import { persistedRunCount, temporaryStateDirectories } from "./persistence-fixtures.js";
 import {
   completedReviewOutcome,
   emptyRoleResult,
+  materialAssessment,
   projectPolicy,
   pullRequestEvent,
   reviewedPullRequest,
+  roleArtifact,
   trustedSameRepoTrust,
+  verifierResult,
 } from "./review-fixtures.js";
 
 const eventPath = fileURLToPath(
@@ -73,6 +76,44 @@ async function validationAttemptsForRunner(
     },
   );
   return verifierInput?.validationAttempts;
+}
+
+function materialRoleResult(request: RoleExecutionRequest) {
+  if (request.step.role === "reviewer") {
+    return {
+      type: "completed" as const,
+      output: {
+        role: "reviewer" as const,
+        candidateFindings: [
+          {
+            summary: "Public greeting can be empty",
+            location: { path: "src/message.ts", line: 1 },
+            impact: "Callers receive an invalid response.",
+            evidence: ["return greeting ?? ''"],
+            fingerprintContext: {
+              claimKind: "invalid-return",
+              affectedArea: "greeting API",
+              policyOrCapability: "runtime correctness",
+              symbol: "greeting",
+            },
+          },
+        ],
+        advisorySuggestions: [],
+      },
+      artifact: roleArtifact("reviewer"),
+    };
+  }
+  if (request.step.role === "challenger") {
+    return {
+      type: "completed" as const,
+      output: {
+        role: "challenger" as const,
+        assessments: [{ candidateIndex: 0, verdict: "support" as const, reason: "supported" }],
+      },
+      artifact: roleArtifact("challenger"),
+    };
+  }
+  return verifierResult([materialAssessment(["scoped-diff"], "verified")]);
 }
 
 function capturingActionIo(outputs: Map<string, string>) {
@@ -180,6 +221,60 @@ it("persists Action runs and publishes safe run outputs", async () => {
   expect(outputs.get("run-id")).toBeTruthy();
   expect(JSON.parse(outputs.get("run-metadata") ?? "")).toMatchObject({ recordVersion: 1 });
   expect(await persistedRunCount(stateDirectory)).toBe(2);
+});
+
+it("applies author Finding discussion replies from the Action adapter", async () => {
+  const stateDirectory = await stateDirectories.create();
+  const event = JSON.stringify(pullRequestEvent({ actor: "author" }));
+  let fingerprint = "";
+  const baseIo = {
+    readFile: async () => event,
+    readDiff: async () => representativeDiff,
+    readPolicy: async () => representativePolicy,
+    setOutput: async () => undefined,
+  };
+
+  const first = await runAction(
+    {
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+      INPUT_STATE_DIRECTORY: stateDirectory,
+    },
+    { ...baseIo, executeRole: async (request) => materialRoleResult(request) },
+  );
+  fingerprint = first.type === "findings" ? first.materialFindings[0].fingerprint.value : "";
+
+  const second = await runAction(
+    {
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+      INPUT_STATE_DIRECTORY: stateDirectory,
+    },
+    {
+      ...baseIo,
+      listFindingDiscussionComments: async () => [
+        {
+          id: 10,
+          actor: "author",
+          body: "/review-owl resolved fixed in latest push",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadBody: findingIdentityMarker(fingerprint),
+        },
+        {
+          id: 11,
+          actor: "reviewer",
+          body: "/review-owl rebut not fixed",
+          createdAt: "2026-01-01T00:00:01.000Z",
+          threadBody: findingIdentityMarker(fingerprint),
+        },
+      ],
+      executeRole: async (request) => emptyRoleResult(request),
+    },
+  );
+
+  expect(second.run?.ledgerTransitions).toEqual([
+    expect.objectContaining({ fingerprint, lifecycleState: "resolved" }),
+  ]);
 });
 
 it("publishes and reports adapter-owned receipts when a publisher is injected", async () => {

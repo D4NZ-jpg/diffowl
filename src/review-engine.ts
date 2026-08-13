@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   reconcileFindingLedger,
+  type FindingDiscussionEvent,
   type FindingDispositionState,
   type FindingLedger,
   type LedgerFindingSnapshot,
@@ -99,13 +100,24 @@ export {
   parseFindingLedger,
   FINDING_LEDGER_VERSION,
 } from "./finding-ledger.js";
+export {
+  findingIdentityMarker,
+  parseFindingDiscussionEvent,
+  recognizeFindingDiscussionCommands,
+} from "./finding-discussion.js";
 export type {
   FindingLedger,
   FindingLedgerEntry,
   FindingLedgerReconciliationInput,
+  FindingDiscussionEvent,
   FindingDispositionState,
   LedgerFindingSnapshot,
 } from "./finding-ledger.js";
+export type {
+  FindingDiscussionCommand,
+  FindingDiscussionComment,
+  FindingDiscussionEffects,
+} from "./finding-discussion.js";
 export { FileSystemReviewPersistenceStore } from "./persistence.js";
 export type {
   PullRequestPersistenceKey,
@@ -140,8 +152,10 @@ export interface ReviewDependencies {
   recordedAt?: () => string;
   mergeBaseSha?: string | undefined;
   obsoleteFingerprints?: readonly string[] | undefined;
+  resolvedFingerprints?: readonly string[] | undefined;
   findingDispositions?: Readonly<Record<string, FindingDispositionState>> | undefined;
   reassessedFingerprints?: readonly string[] | undefined;
+  findingDiscussionEvents?: readonly FindingDiscussionEvent[] | undefined;
 }
 
 const defaultCredentialProfiles = { default: { type: "env" as const } };
@@ -338,7 +352,9 @@ async function persistOutcome(
         suppressedFindings: suppressedForLedger(suppressedFindings),
         dispositions: dependencies.findingDispositions,
         obsoleteFingerprints: dependencies.obsoleteFingerprints,
+        resolvedFingerprints: dependencies.resolvedFingerprints,
         reassessments: dependencies.reassessedFingerprints,
+        discussionEvents: dependencies.findingDiscussionEvents,
       });
       const transitions = ledgerTransitions(previousLedger, ledger);
       const lifecycle = new Map(

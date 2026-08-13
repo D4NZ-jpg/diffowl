@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
+import { type GitHubPullRequestEvent, isPullRequestEvent } from "./action-event.js";
 import { addedLinesFromDiff } from "./github-diff.js";
 import {
   REQUIRED_PUBLICATION_SURFACES,
@@ -10,6 +11,11 @@ import {
   type PublicationTarget,
   publishReviewOutcome,
 } from "./github-publication.js";
+import {
+  type FindingDiscussionComment,
+  recognizeFindingDiscussionCommands,
+} from "./finding-discussion.js";
+import { listFindingDiscussionComments } from "./github-discussion.js";
 import { createHostVerificationAdapter } from "./host-verification.js";
 import {
   PROJECT_POLICY_PATH,
@@ -24,21 +30,15 @@ import {
 } from "./review-engine.js";
 import { classifyTrust } from "./trust.js";
 
-interface GitHubPullRequestEvent {
-  repository: { full_name: string };
-  pull_request: {
-    number: number;
-    base: { sha: string; repo: { full_name: string } };
-    head: { sha: string; repo: { full_name: string } };
-    user?: { login: string };
-  };
-}
-
 export interface ActionIo {
   readFile(path: string, encoding: "utf8"): Promise<string>;
   readDiff(baseSha: string, headSha: string): Promise<string>;
   readPolicy(revision: string, path: string): Promise<string | undefined>;
   setOutput(name: string, value: string): Promise<void>;
+  listFindingDiscussionComments?(
+    repository: string,
+    pullRequestNumber: number,
+  ): Promise<FindingDiscussionComment[]>;
   publishOutcome?(
     target: PublicationTarget,
     outcome: ReviewOutcome,
@@ -90,6 +90,8 @@ function readGitFileAtRevision(revision: string, path: string): Promise<string |
 export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
   const token = env.GITHUB_TOKEN;
   delete env.GITHUB_TOKEN;
+  const transport =
+    token === undefined ? undefined : createGitHubTransport(token, env.GITHUB_API_URL);
   return {
     readFile,
     readDiff: readGitDiff,
@@ -101,60 +103,18 @@ export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
       }
       await appendFile(outputPath, `${name}=${value}\n`, "utf8");
     },
-    ...(token === undefined
+    ...(transport === undefined
       ? {}
       : {
+          listFindingDiscussionComments: (repository: string, pullRequestNumber: number) =>
+            listFindingDiscussionComments(transport, repository, pullRequestNumber),
           publishOutcome: (
             target: PublicationTarget,
             outcome: ReviewOutcome,
             authorization: PublicationAuthorization,
-          ) =>
-            publishReviewOutcome(
-              createGitHubTransport(token, env.GITHUB_API_URL),
-              target,
-              outcome,
-              authorization,
-            ),
+          ) => publishReviewOutcome(transport, target, outcome, authorization),
         }),
   };
-}
-
-function isRepository(value: unknown): value is { full_name: string } {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  return typeof (value as Record<string, unknown>).full_name === "string";
-}
-
-function isRef(value: unknown): value is {
-  sha: string;
-  repo: { full_name: string };
-} {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const ref = value as Record<string, unknown>;
-  return typeof ref.sha === "string" && isRepository(ref.repo);
-}
-
-function isPullRequestEvent(value: unknown): value is GitHubPullRequestEvent {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const event = value as Record<string, unknown>;
-  if (!isRepository(event.repository)) {
-    return false;
-  }
-  if (typeof event.pull_request !== "object" || event.pull_request === null) {
-    return false;
-  }
-  const pullRequest = event.pull_request as Record<string, unknown>;
-  return (
-    typeof pullRequest.number === "number" &&
-    Number.isInteger(pullRequest.number) &&
-    isRef(pullRequest.base) &&
-    isRef(pullRequest.head)
-  );
 }
 
 async function unsafeContextOutcome(
@@ -181,8 +141,17 @@ function actionVerificationAdapter(
     : unavailableVerificationAdapter;
 }
 
-function reviewDependencies(env: NodeJS.ProcessEnv, io: ActionIo) {
+async function reviewDependencies(
+  env: NodeJS.ProcessEnv,
+  io: ActionIo,
+  repository: string,
+  pullRequest: GitHubPullRequestEvent["pull_request"],
+) {
   const stateDirectory = (env["INPUT_STATE-DIRECTORY"] ?? env.INPUT_STATE_DIRECTORY)?.trim();
+  const effects = recognizeFindingDiscussionCommands(
+    (await io.listFindingDiscussionComments?.(repository, pullRequest.number)) ?? [],
+    { authorLogins: pullRequest.user?.login === undefined ? [] : [pullRequest.user.login] },
+  );
   return {
     credentialProfiles: io.credentialProfiles ?? { default: { type: "env" as const } },
     executeRole: io.executeRole,
@@ -191,6 +160,10 @@ function reviewDependencies(env: NodeJS.ProcessEnv, io: ActionIo) {
       stateDirectory === undefined || stateDirectory === ""
         ? undefined
         : new FileSystemReviewPersistenceStore(stateDirectory),
+    findingDispositions: effects.dispositions,
+    resolvedFingerprints: effects.resolvedFingerprints,
+    reassessedFingerprints: effects.reassessedFingerprints,
+    findingDiscussionEvents: effects.events,
   };
 }
 
@@ -305,7 +278,7 @@ export async function runAction(
         contents: policyContents,
       },
     },
-    reviewDependencies(env, io),
+    await reviewDependencies(env, io, repository.full_name, pullRequest),
   );
 
   await publishActionOutcome(

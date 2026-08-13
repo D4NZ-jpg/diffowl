@@ -6,6 +6,7 @@ import type {
   ReviewOutcome,
   ValidationAttempt,
 } from "./review-engine.js";
+import { findingIdentityMarker } from "./finding-discussion.js";
 import { truncateUtf8 } from "./utf8.js";
 
 export type GitHubCheckConclusion =
@@ -90,6 +91,7 @@ export function findingBody(finding: MaterialFinding): string {
   ].join("\n");
   return truncateUtf8(
     [
+      findingIdentityMarker(finding.fingerprint.value),
       FINDING_COMMENT_MARKER,
       "",
       `**Problem:** ${finding.summary}`,
@@ -103,7 +105,7 @@ export function findingBody(finding: MaterialFinding): string {
       "",
       `**Lifecycle state:** **${finding.lifecycleState}**`,
       "",
-      "**Recommended next action:** Confirm the evidence, address the material problem, then rerun Review OWL. If context changes the assessment, reply in this thread with that context.",
+      "**Recommended next action:** Confirm the evidence, address the material problem, then rerun Review OWL. If context changes the assessment, reply with `/review-owl accept`, `/review-owl rebut <context>`, `/review-owl suppress <reason>`, `/review-owl ignore <reason>`, `/review-owl resolved`, `/review-owl recheck`, `/review-owl rerun`, `/review-owl explain`, or `/review-owl reassess <context>`.",
       "",
       `Publication reconciliation hint (adapter-owned; not Finding identity): \`${reconciliationHint(finding)}\``,
     ].join("\n"),
