@@ -38,6 +38,11 @@ _Avoid_: Default approval, autonomous merge, AI correctness guarantee
 
 The forge-independent core that gathers review context, orchestrates RunCell agents, validates and normalizes findings, and computes review outcomes. It does not publish to GitHub directly.
 
+## Self-hostable review path
+
+The full V1 pull-request review workflow that a team can inspect, run, and control without a Diffowl-hosted service. It includes the review engine, GitHub Action adapter, local CLI, project policy, finding ledger, review outcomes, GitHub publishing, provider configuration, and security enforcement.
+_Avoid_: Hosted-only core, commercial review engine, cloud-required review
+
 ## GitHub Action adapter
 
 The V1 delivery adapter that translates GitHub pull-request events and data into review-engine input, then publishes the engine's result through GitHub review surfaces.
