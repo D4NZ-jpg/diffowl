@@ -3,14 +3,20 @@ import {
   type ProjectPolicy,
   type ProjectPolicyInput,
   type ReviewRole,
-  type RoleProfile,
   parseProjectPolicy,
 } from "./project-policy.js";
-import type { Credentials } from "runcell";
-
+import {
+  type DiffowlCredentials,
+  type ResolvedRole,
+  type ResolvedRoles,
+  type ReviewedPullRequest,
+  type RoleExecutionArtifact,
+  type RoleExecutor,
+  orchestrateReviewRoles,
+  orchestrationPlan,
+} from "./review-orchestration.js";
+import { createRunCellRoleExecutor } from "./runcell-orchestration.js";
 import type { TrustClassification } from "./trust.js";
-
-export type DiffowlCredentials = Exclude<Credentials, { type: "apiKeys" }>;
 
 export type {
   PolicySource,
@@ -22,19 +28,34 @@ export type {
 } from "./project-policy.js";
 export { PROJECT_POLICY_CEILINGS, PROJECT_POLICY_PATH } from "./project-policy.js";
 export type {
+  AdvisorySuggestion,
+  CandidateDraft,
+  CandidateFinding,
+  CandidateLocation,
+  ChallengerAssessment,
+  DiffowlAuthBlob,
+  DiffowlCredentials,
+  DiffowlCredentialStore,
+  DiffowlStoredCredential,
+  ExecutionFile,
+  ExecutionSnapshot,
+  OrchestrationPlan,
+  OrchestrationStep,
+  ReviewedPullRequest,
+  RoleExecutionArtifact,
+  RoleExecutionEvent,
+  RoleExecutionRequest,
+  RoleExecutionResult,
+  RoleOutput,
+  VerifierAssessment,
+} from "./review-orchestration.js";
+export type {
   PublisherValidation,
   TrustCapabilities,
   TrustClassification,
   TrustContext,
 } from "./trust.js";
 export { classifyTrust } from "./trust.js";
-
-export interface ReviewedPullRequest {
-  repository: string;
-  number: number;
-  baseSha: string;
-  headSha: string;
-}
 
 export interface PullRequestInput extends ReviewedPullRequest {
   diff: string;
@@ -53,38 +74,37 @@ interface ConfiguredOutcomeBase extends OutcomeBase {
 
 export type ReviewOutcome =
   | { type: "policy_skip"; reason: string; trust: TrustClassification }
+  | (ConfiguredOutcomeBase & {
+      type: "candidates_generated";
+      candidateFindings: import("./review-orchestration.js").CandidateFinding[];
+      advisorySuggestions: import("./review-orchestration.js").AdvisorySuggestion[];
+      orchestrationPlan: import("./review-orchestration.js").OrchestrationPlan;
+      executionArtifacts: RoleExecutionArtifact[];
+    })
   | (ConfiguredOutcomeBase & { type: "partial_coverage"; reason: string })
   | (ConfiguredOutcomeBase & {
       type: "provider_failure" | "budget_limit";
       reason: string;
+      executionArtifacts: RoleExecutionArtifact[];
     })
-  | (ConfiguredOutcomeBase & { type: "timeout"; timeoutSeconds: number })
+  | (ConfiguredOutcomeBase & {
+      type: "timeout";
+      timeoutSeconds: number;
+      executionArtifacts: RoleExecutionArtifact[];
+    })
   | (OutcomeBase & {
       type: "configuration_failure";
       reason: string;
       policySource: PolicySource;
     });
 
-export interface RoleExecutionRequest {
-  pullRequest: ReviewedPullRequest;
-  diff: string;
-  roles: Record<ReviewRole, { profile: RoleProfile; credentials: DiffowlCredentials }>;
-  signal: AbortSignal;
-}
-
-export type RoleExecutionResult =
-  | { type: "completed" }
-  | { type: "provider_failure" | "budget_limit"; reason: string };
-
 export interface ReviewDependencies {
-  credentialProfiles: Readonly<Record<string, DiffowlCredentials>>;
-  executeRoles(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
+  credentialProfiles?: Readonly<Record<string, DiffowlCredentials>> | undefined;
+  executeRole?: RoleExecutor | undefined;
 }
 
-const defaultDependencies: ReviewDependencies = {
-  credentialProfiles: { default: { type: "env" } },
-  executeRoles: async () => ({ type: "completed" }),
-};
+const defaultCredentialProfiles = { default: { type: "env" as const } };
+const defaultExecuteRole = createRunCellRoleExecutor();
 
 function pullRequestFrom(input: PullRequestInput): ReviewedPullRequest {
   return {
@@ -114,8 +134,8 @@ function configurationFailure(input: PullRequestInput, reason: string): ReviewOu
 function resolveRole(
   name: ReviewRole,
   policy: ProjectPolicy,
-  credentialProfiles: ReviewDependencies["credentialProfiles"],
-): { profile: RoleProfile; credentials: DiffowlCredentials } | string {
+  credentialProfiles: Readonly<Record<string, DiffowlCredentials>>,
+): ResolvedRole | string {
   const profile = policy.roleProfiles[name];
   const credentials = Object.hasOwn(credentialProfiles, profile.credentialProfile)
     ? credentialProfiles[profile.credentialProfile]
@@ -125,32 +145,24 @@ function resolveRole(
     : { profile, credentials };
 }
 
-function roleExecutionRequest(
-  input: PullRequestInput,
+function resolveRoles(
   policy: ProjectPolicy,
-  dependencies: ReviewDependencies,
-  signal: AbortSignal,
-): RoleExecutionRequest | string {
-  const reviewer = resolveRole("reviewer", policy, dependencies.credentialProfiles);
+  credentialProfiles: Readonly<Record<string, DiffowlCredentials>>,
+): ResolvedRoles | string {
+  const reviewer = resolveRole("reviewer", policy, credentialProfiles);
   if (typeof reviewer === "string") return reviewer;
-  const challenger = resolveRole("challenger", policy, dependencies.credentialProfiles);
+  const challenger = resolveRole("challenger", policy, credentialProfiles);
   if (typeof challenger === "string") return challenger;
-  const verifier = resolveRole("verifier", policy, dependencies.credentialProfiles);
+  const verifier = resolveRole("verifier", policy, credentialProfiles);
   if (typeof verifier === "string") return verifier;
-  return {
-    pullRequest: pullRequestFrom(input),
-    diff: input.diff,
-    roles: { reviewer, challenger, verifier },
-    signal,
-  };
+  return { reviewer, challenger, verifier };
 }
 
 async function executeWithinTimeout(
-  request: RoleExecutionRequest,
+  execution: () => ReturnType<typeof orchestrateReviewRoles>,
   timeoutSeconds: number,
-  executeRoles: ReviewDependencies["executeRoles"],
   controller: AbortController,
-): Promise<RoleExecutionResult | { type: "timeout" }> {
+): Promise<Awaited<ReturnType<typeof orchestrateReviewRoles>> | { type: "timeout" }> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<{ type: "timeout" }>((resolve) => {
     timer = setTimeout(() => {
@@ -159,11 +171,12 @@ async function executeWithinTimeout(
     }, timeoutSeconds * 1_000);
   });
   try {
-    return await Promise.race([executeRoles(request), timeout]);
+    return await Promise.race([execution(), timeout]);
   } catch {
     return {
       type: "provider_failure",
       reason: "Provider role execution failed.",
+      executionArtifacts: [],
     };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -172,7 +185,7 @@ async function executeWithinTimeout(
 
 export async function runReview(
   input: PullRequestInput,
-  dependencies: ReviewDependencies = defaultDependencies,
+  dependencies: ReviewDependencies = {},
 ): Promise<ReviewOutcome> {
   const result = parseProjectPolicy(input.policy.contents);
   if (!result.valid) return configurationFailure(input, result.reason);
@@ -191,13 +204,25 @@ export async function runReview(
       reason: partialCoverageReason(input.trust),
     };
   }
+  const roles = resolveRoles(
+    result.policy,
+    dependencies.credentialProfiles ?? defaultCredentialProfiles,
+  );
+  if (typeof roles === "string") return configurationFailure(input, roles);
   const controller = new AbortController();
-  const request = roleExecutionRequest(input, result.policy, dependencies, controller.signal);
-  if (typeof request === "string") return configurationFailure(input, request);
+  const executionArtifacts: RoleExecutionArtifact[] = [];
   const execution = await executeWithinTimeout(
-    request,
+    () =>
+      orchestrateReviewRoles(
+        pullRequestFrom(input),
+        input.diff,
+        result.policy,
+        roles,
+        dependencies.executeRole ?? defaultExecuteRole,
+        controller.signal,
+        executionArtifacts,
+      ),
     result.policy.limits.reviewTimeoutSeconds,
-    dependencies.executeRoles,
     controller,
   );
   if (execution.type === "timeout") {
@@ -205,12 +230,16 @@ export async function runReview(
       ...configured,
       type: "timeout",
       timeoutSeconds: result.policy.limits.reviewTimeoutSeconds,
+      executionArtifacts,
     };
   }
   if (execution.type !== "completed") return { ...configured, ...execution };
   return {
     ...configured,
-    type: "partial_coverage",
-    reason: partialCoverageReason(input.trust),
+    type: "candidates_generated",
+    candidateFindings: execution.candidateFindings,
+    advisorySuggestions: execution.advisorySuggestions,
+    orchestrationPlan: orchestrationPlan(result.policy),
+    executionArtifacts: execution.executionArtifacts,
   };
 }

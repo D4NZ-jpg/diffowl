@@ -17,7 +17,7 @@ export interface CliIo {
   stdout(text: string): void;
   stderr(text: string): void;
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>>;
-  executeRoles?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
+  executeRole?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
 }
 
 const processIo: CliIo = {
@@ -89,7 +89,7 @@ export async function runCli(args: readonly string[], io: CliIo = processIo): Pr
       },
       {
         credentialProfiles: io.credentialProfiles ?? { default: "local" },
-        executeRoles: io.executeRoles ?? (async () => ({ type: "completed" })),
+        executeRole: io.executeRole,
       },
     );
     io.stdout(`${JSON.stringify(outcome)}\n`);

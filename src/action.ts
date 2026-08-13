@@ -27,7 +27,7 @@ export interface ActionIo {
   readPolicy(revision: string, path: string): Promise<string | undefined>;
   setOutput(name: string, value: string): Promise<void>;
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>>;
-  executeRoles?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
+  executeRole?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
 }
 
 function readGitDiff(baseSha: string, headSha: string): Promise<string> {
@@ -185,7 +185,7 @@ export async function runAction(
     },
     {
       credentialProfiles: io.credentialProfiles ?? { default: { type: "env" } },
-      executeRoles: io.executeRoles ?? (async () => ({ type: "completed" })),
+      executeRole: io.executeRole,
     },
   );
 

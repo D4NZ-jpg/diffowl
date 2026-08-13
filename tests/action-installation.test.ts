@@ -122,7 +122,9 @@ describe("installable Review OWL Action", () => {
 
     const outcome = JSON.parse(result.stdout);
     expect(outcome).toMatchObject({
-      type: "partial_coverage",
+      type: "provider_failure",
+      reason: "Provider execution failed for the reviewer role.",
+      executionArtifacts: [{ role: "reviewer" }],
       pullRequest: {
         repository: "example/review-target",
         number: 42,

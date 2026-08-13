@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
 import type { RoleExecutionRequest } from "../src/review-engine.js";
+import { emptyArtifact, emptyRoleResult } from "./role-execution-fixtures.js";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/pull-request.json", import.meta.url));
 const policyPath = fileURLToPath(new URL("./fixtures/project-policy.json", import.meta.url));
@@ -27,30 +28,41 @@ describe("diffowl review", () => {
         stderr += text;
       },
       credentialProfiles: { default: "local" },
-      executeRoles: async (request) => {
-        execution = request;
-        return { type: "completed" };
+      executeRole: async (request) => {
+        execution ??= request;
+        return emptyRoleResult(request);
       },
     });
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
     expect(execution).toMatchObject({
-      roles: {
-        reviewer: { credentials: "local" },
-        challenger: { credentials: "local" },
-        verifier: { credentials: "local" },
-      },
+      step: { role: "reviewer", purpose: "generate_candidates" },
+      credentials: "local",
     });
     expect(JSON.parse(stdout)).toEqual({
-      type: "partial_coverage",
+      type: "candidates_generated",
       pullRequest: {
         repository: "example/review-target",
         number: 42,
         baseSha: "1111111111111111111111111111111111111111",
         headSha: "2222222222222222222222222222222222222222",
       },
-      reason: "The tracer path does not analyze changes yet.",
+      candidateFindings: [],
+      advisorySuggestions: [],
+      orchestrationPlan: {
+        maxCandidateFindings: 25,
+        steps: [
+          { role: "reviewer", purpose: "generate_candidates" },
+          { role: "challenger", purpose: "challenge_candidates" },
+          { role: "verifier", purpose: "verify_candidates" },
+        ],
+      },
+      executionArtifacts: [
+        emptyArtifact("reviewer"),
+        emptyArtifact("challenger"),
+        emptyArtifact("verifier"),
+      ],
       trust: {
         class: "local_cli",
         capabilities: {

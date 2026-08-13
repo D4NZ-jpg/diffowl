@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 
 import { runAction } from "../src/action.js";
 import type { RoleExecutionRequest } from "../src/review-engine.js";
+import { emptyArtifact, emptyRoleResult } from "./role-execution-fixtures.js";
 
 const eventPath = fileURLToPath(
   new URL("./fixtures/github-pull-request-event.json", import.meta.url),
@@ -34,10 +35,10 @@ const representativePolicy = JSON.stringify({
 });
 
 const representativeDiff = [
-  "diff --git a/message.txt b/message.txt",
+  "diff --git a/src/message.ts b/src/message.ts",
   "index ce01362..94954ab 100644",
-  "--- a/message.txt",
-  "+++ b/message.txt",
+  "--- a/src/message.ts",
+  "+++ b/src/message.ts",
   "@@ -1 +1 @@",
   "-hello",
   "+hello owl",
@@ -71,29 +72,40 @@ it("supplies an environment credential profile to the Review engine", async () =
         outputs.set(name, value);
       },
       credentialProfiles: { default: { type: "env" } },
-      executeRoles: async (request) => {
-        execution = request;
-        return { type: "completed" };
+      executeRole: async (request) => {
+        execution ??= request;
+        return emptyRoleResult(request);
       },
     },
   );
 
   expect(execution).toMatchObject({
-    roles: {
-      reviewer: { credentials: { type: "env" } },
-      challenger: { credentials: { type: "env" } },
-      verifier: { credentials: { type: "env" } },
-    },
+    step: { role: "reviewer", purpose: "generate_candidates" },
+    credentials: { type: "env" },
   });
   expect(outcome).toEqual({
-    type: "partial_coverage",
+    type: "candidates_generated",
     pullRequest: {
       repository: "example/review-target",
       number: 42,
       baseSha: "1111111111111111111111111111111111111111",
       headSha: "2222222222222222222222222222222222222222",
     },
-    reason: "The tracer path does not analyze changes yet.",
+    candidateFindings: [],
+    advisorySuggestions: [],
+    orchestrationPlan: {
+      maxCandidateFindings: 25,
+      steps: [
+        { role: "reviewer", purpose: "generate_candidates" },
+        { role: "challenger", purpose: "challenge_candidates" },
+        { role: "verifier", purpose: "verify_candidates" },
+      ],
+    },
+    executionArtifacts: [
+      emptyArtifact("reviewer"),
+      emptyArtifact("challenger"),
+      emptyArtifact("verifier"),
+    ],
     trust: {
       class: "trusted_same_repo_pull_request",
       capabilities: {
