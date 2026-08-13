@@ -1,3 +1,18 @@
+/* oxlint-disable max-lines */
+import { randomUUID } from "node:crypto";
+
+import {
+  reconcileFindingLedger,
+  type FindingDispositionState,
+  type FindingLedger,
+  type LedgerFindingSnapshot,
+} from "./finding-ledger.js";
+import type { PullRequestPersistenceKey, ReviewPersistenceStore } from "./persistence.js";
+import {
+  createReviewRunRecord,
+  REVIEW_RUN_RECORD_VERSION,
+  safeReviewOutcome,
+} from "./review-run-record.js";
 import {
   type PolicySource,
   type ProjectPolicy,
@@ -14,6 +29,7 @@ import {
   type RoleExecutor,
   type VerificationAdapter,
   type VerificationContext,
+  type SuppressedFinding,
   orchestrateReviewRoles,
   orchestrationPlan,
 } from "./review-orchestration.js";
@@ -66,7 +82,47 @@ export type {
   TrustContext,
 } from "./trust.js";
 export { classifyTrust } from "./trust.js";
-export type { ReviewOutcome } from "./review-outcome.js";
+export type { ReviewOutcome, ReviewRunMetadata } from "./review-outcome.js";
+export {
+  createFindingFingerprint,
+  parseFindingFingerprint,
+  FINDING_FINGERPRINT_VERSION,
+} from "./finding-fingerprint.js";
+export type {
+  FindingFingerprint,
+  FindingFingerprintInput,
+  EvidenceAnchorInput,
+  LocationContextInput,
+} from "./finding-fingerprint.js";
+export {
+  reconcileFindingLedger,
+  parseFindingLedger,
+  FINDING_LEDGER_VERSION,
+} from "./finding-ledger.js";
+export type {
+  FindingLedger,
+  FindingLedgerEntry,
+  FindingLedgerReconciliationInput,
+  FindingDispositionState,
+  LedgerFindingSnapshot,
+} from "./finding-ledger.js";
+export { FileSystemReviewPersistenceStore } from "./persistence.js";
+export type {
+  PullRequestPersistenceKey,
+  ReviewPersistenceStore,
+  ReviewPersistenceTransaction,
+} from "./persistence.js";
+export {
+  createReviewRunRecord,
+  parseReviewRunRecord,
+  REVIEW_RUN_RECORD_VERSION,
+} from "./review-run-record.js";
+export type {
+  ReviewRunRecord,
+  SafeReviewOutcomeRecord,
+  SafeProviderModelMetadata,
+  SafeValidationAttemptRecord,
+} from "./review-run-record.js";
 
 export interface PullRequestInput extends ReviewedPullRequest {
   diff: string;
@@ -78,6 +134,14 @@ export interface ReviewDependencies {
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>> | undefined;
   executeRole?: RoleExecutor | undefined;
   verificationAdapter?: VerificationAdapter | undefined;
+  persistence?: ReviewPersistenceStore | undefined;
+  runId?: string | undefined;
+  engineVersion?: string | undefined;
+  recordedAt?: () => string;
+  mergeBaseSha?: string | undefined;
+  obsoleteFingerprints?: readonly string[] | undefined;
+  findingDispositions?: Readonly<Record<string, FindingDispositionState>> | undefined;
+  reassessedFingerprints?: readonly string[] | undefined;
 }
 
 const defaultCredentialProfiles = { default: { type: "env" as const } };
@@ -179,6 +243,148 @@ function incompleteCoverageReason(verification: VerificationContext): string | u
     : `Review coverage is partial: ${verification.coverageGaps.join(" ")}`;
 }
 
+function ledgerSnapshot(finding: {
+  fingerprint: { value: string };
+  summary: string;
+  location?: { path: string } | undefined;
+  locationPath?: string | undefined;
+}): LedgerFindingSnapshot {
+  return {
+    fingerprint: finding.fingerprint.value,
+    summary: finding.summary,
+    locationPath: finding.location?.path ?? finding.locationPath,
+  };
+}
+
+function validationAttempts(
+  outcome: ReviewOutcome,
+  verification?: VerificationContext | undefined,
+): VerificationContext["validationAttempts"] {
+  return "verification" in outcome && outcome.verification !== undefined
+    ? outcome.verification.validationAttempts
+    : (verification?.validationAttempts ?? []);
+}
+
+function completedForLedger(outcome: ReviewOutcome): boolean {
+  return (
+    (outcome.type === "clean" || outcome.type === "findings") &&
+    outcome.coverage === "completed_permitted"
+  );
+}
+
+function findingsForLedger(outcome: ReviewOutcome): LedgerFindingSnapshot[] {
+  return "materialFindings" in outcome && outcome.materialFindings !== undefined
+    ? outcome.materialFindings.map(ledgerSnapshot)
+    : [];
+}
+
+function suppressedForLedger(findings: SuppressedFinding[]): LedgerFindingSnapshot[] {
+  return findings.map(ledgerSnapshot);
+}
+
+function ledgerTransitions(previousLedger: FindingLedger | undefined, ledger: FindingLedger) {
+  const previousLifecycle = new Map(
+    (previousLedger?.entries ?? []).map((entry) => [entry.fingerprint, entry.lifecycleState]),
+  );
+  return ledger.entries.map(({ fingerprint, lifecycleState }) => ({
+    fingerprint,
+    lifecycleState,
+    previousLifecycleState: previousLifecycle.get(fingerprint),
+    changed: previousLifecycle.get(fingerprint) !== lifecycleState,
+  }));
+}
+
+function persistenceFailureOutcome(input: PullRequestInput, outcome: ReviewOutcome): ReviewOutcome {
+  if ("policy" in outcome) {
+    return {
+      type: "internal_failure",
+      pullRequest: pullRequestFrom(input),
+      policy: outcome.policy,
+      reason: "Review persistence failed; the result cannot be treated as clean.",
+      trust: input.trust,
+    };
+  }
+  return {
+    type: "configuration_failure",
+    pullRequest: pullRequestFrom(input),
+    policySource: input.policy.source,
+    reason: "Review persistence failed; the result was not recorded.",
+    trust: input.trust,
+  };
+}
+
+// oxlint-disable-next-line max-lines-per-function
+async function persistOutcome(
+  input: PullRequestInput,
+  outcome: ReviewOutcome,
+  suppressedFindings: SuppressedFinding[],
+  dependencies: ReviewDependencies,
+  verification?: VerificationContext | undefined,
+): Promise<ReviewOutcome> {
+  if (dependencies.persistence === undefined) return outcome;
+  const runId = dependencies.runId ?? randomUUID();
+  const key: PullRequestPersistenceKey = {
+    repository: input.repository,
+    pullRequestNumber: input.number,
+  };
+  try {
+    return await dependencies.persistence.withTransaction(key, async (transaction) => {
+      const previousLedger = await transaction.loadLedger();
+      const ledger = reconcileFindingLedger({
+        previous: previousLedger,
+        runId,
+        completion: completedForLedger(outcome) ? "completed_permitted" : "incomplete",
+        materialFindings: findingsForLedger(outcome),
+        suppressedFindings: suppressedForLedger(suppressedFindings),
+        dispositions: dependencies.findingDispositions,
+        obsoleteFingerprints: dependencies.obsoleteFingerprints,
+        reassessments: dependencies.reassessedFingerprints,
+      });
+      const transitions = ledgerTransitions(previousLedger, ledger);
+      const lifecycle = new Map(
+        ledger.entries.map((entry) => [entry.fingerprint, entry.lifecycleState]),
+      );
+      if ("materialFindings" in outcome && outcome.materialFindings !== undefined) {
+        for (const finding of outcome.materialFindings) {
+          finding.lifecycleState =
+            lifecycle.get(finding.fingerprint.value) ?? finding.lifecycleState;
+        }
+      }
+      const record = createReviewRunRecord({
+        runId,
+        recordedAt: dependencies.recordedAt?.() ?? new Date().toISOString(),
+        engineVersion: dependencies.engineVersion ?? "0.1.0",
+        revision: { pullRequest: pullRequestFrom(input), mergeBaseSha: dependencies.mergeBaseSha },
+        trust: input.trust,
+        unavailablePolicyContents: input.policy.contents,
+        validationAttempts: validationAttempts(outcome, verification),
+        finalOutcome: outcome,
+        suppressedFindings,
+        ledgerTransitions: transitions,
+      });
+      await transaction.saveLedger(ledger);
+      await transaction.saveRunRecord(record);
+      return {
+        ...outcome,
+        run: {
+          runId,
+          recordVersion: REVIEW_RUN_RECORD_VERSION,
+          outcome: safeReviewOutcome(outcome, {
+            suppressedFindings,
+            ledgerTransitions: transitions,
+          }),
+          ledgerTransitions: transitions.map(({ fingerprint, lifecycleState }) => ({
+            fingerprint,
+            lifecycleState,
+          })),
+        },
+      };
+    });
+  } catch {
+    return persistenceFailureOutcome(input, outcome);
+  }
+}
+
 function completedReviewOutcome(
   configured: {
     pullRequest: ReviewedPullRequest;
@@ -194,17 +400,17 @@ function completedReviewOutcome(
     orchestrationPlan: orchestrationPlan(configured.policy.effective),
     executionArtifacts: execution.executionArtifacts,
   };
+  const reason = incompleteCoverageReason(execution.verification);
+  if (reason !== undefined)
+    return { ...configured, ...reviewDetails, type: "partial_coverage", reason };
   if (execution.materialFindings.length === 0) {
-    const reason = incompleteCoverageReason(execution.verification);
-    return reason === undefined
-      ? {
-          ...configured,
-          ...reviewDetails,
-          type: "clean",
-          coverage: "completed_permitted",
-          materialFindings: [],
-        }
-      : { ...configured, ...reviewDetails, type: "partial_coverage", reason };
+    return {
+      ...configured,
+      ...reviewDetails,
+      type: "clean",
+      coverage: "completed_permitted",
+      materialFindings: [],
+    };
   }
   const completed = { ...configured, ...reviewDetails, coverage: "completed_permitted" as const };
   const [firstFinding, ...remainingFindings] = execution.materialFindings;
@@ -216,13 +422,15 @@ function completedReviewOutcome(
 }
 
 // The public seam keeps policy, trust, timeout, and orchestration ordering visible.
-// oxlint-disable-next-line max-lines-per-function
+// oxlint-disable-next-line max-lines-per-function, complexity
 export async function runReview(
   input: PullRequestInput,
   dependencies: ReviewDependencies = {},
 ): Promise<ReviewOutcome> {
   const result = parseProjectPolicy(input.policy.contents);
-  if (!result.valid) return configurationFailure(input, result.reason);
+  if (!result.valid) {
+    return persistOutcome(input, configurationFailure(input, result.reason), [], dependencies);
+  }
   const configured = {
     pullRequest: pullRequestFrom(input),
     trust: input.trust,
@@ -232,19 +440,32 @@ export async function runReview(
     input.trust.capabilities.secrets === "provider_credentials_only" ||
     input.trust.capabilities.secrets === "local_user_authorized";
   if (!providerCredentialsAllowed) {
-    return {
-      ...configured,
-      type: "partial_coverage",
-      reason: partialCoverageReason(input.trust),
-    };
+    return persistOutcome(
+      input,
+      {
+        ...configured,
+        type: "partial_coverage",
+        reason: partialCoverageReason(input.trust),
+      },
+      [],
+      dependencies,
+    );
   }
   const roles = resolveRoles(
     result.policy,
     dependencies.credentialProfiles ?? defaultCredentialProfiles,
   );
-  if (typeof roles === "string") return configurationFailure(input, roles);
+  if (typeof roles === "string") {
+    return persistOutcome(input, configurationFailure(input, roles), [], dependencies);
+  }
   const controller = new AbortController();
   const executionArtifacts: RoleExecutionArtifact[] = [];
+  const verification: VerificationContext = {
+    evidenceCatalog: [],
+    validationAttempts: [],
+    limitations: [],
+    coverageGaps: [],
+  };
   const execution = await executeWithinTimeout(
     () =>
       orchestrateReviewRoles(
@@ -257,20 +478,37 @@ export async function runReview(
         dependencies.verificationAdapter ?? unavailableVerificationAdapter,
         input.trust.capabilities.validationCommands !== "denied",
         executionArtifacts,
+        verification,
       ),
     result.policy.limits.reviewTimeoutSeconds,
     controller,
   );
   if (execution.type === "timeout") {
-    return {
-      ...configured,
-      type: "timeout",
-      timeoutSeconds: result.policy.limits.reviewTimeoutSeconds,
-      executionArtifacts: [...executionArtifacts],
-    };
+    return persistOutcome(
+      input,
+      {
+        ...configured,
+        type: "timeout",
+        timeoutSeconds: result.policy.limits.reviewTimeoutSeconds,
+        executionArtifacts: [...executionArtifacts],
+      },
+      [],
+      dependencies,
+      verification,
+    );
   }
-  if (execution.type === "internal_failure") return { ...configured, ...execution };
-  return execution.type === "completed"
-    ? completedReviewOutcome(configured, execution)
-    : { ...configured, ...execution };
+  const outcome: ReviewOutcome =
+    execution.type === "internal_failure"
+      ? { ...configured, ...execution }
+      : execution.type === "completed"
+        ? completedReviewOutcome(configured, execution)
+        : { ...configured, ...execution };
+  const suppressed = "suppressedFindings" in execution ? execution.suppressedFindings : [];
+  return persistOutcome(
+    input,
+    outcome,
+    suppressed,
+    dependencies,
+    "verification" in execution ? execution.verification : undefined,
+  );
 }

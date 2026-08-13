@@ -1,0 +1,2 @@
+# Generated third-party bundle contains whitespace inside JavaScript template literals.
+dist/action/index.js -whitespace

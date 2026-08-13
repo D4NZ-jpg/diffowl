@@ -9,6 +9,7 @@ import {
   type RoleExecutionRequest,
   type RoleExecutionResult,
   type VerificationAdapter,
+  FileSystemReviewPersistenceStore,
   runReview,
   unavailableVerificationAdapter,
 } from "./review-engine.js";
@@ -135,7 +136,7 @@ async function unsafeContextOutcome(
     reason,
     trust: classifyTrust({ type: "unsupported", reason }),
   };
-  await io.setOutput("outcome", JSON.stringify(outcome));
+  await setReviewOutputs(io, outcome);
   return outcome;
 }
 
@@ -150,11 +151,24 @@ function actionVerificationAdapter(
 }
 
 function reviewDependencies(env: NodeJS.ProcessEnv, io: ActionIo) {
+  const stateDirectory = (env["INPUT_STATE-DIRECTORY"] ?? env.INPUT_STATE_DIRECTORY)?.trim();
   return {
     credentialProfiles: io.credentialProfiles ?? { default: { type: "env" as const } },
     executeRole: io.executeRole,
     verificationAdapter: actionVerificationAdapter(env, io.verificationAdapter),
+    persistence:
+      stateDirectory === undefined || stateDirectory === ""
+        ? undefined
+        : new FileSystemReviewPersistenceStore(stateDirectory),
   };
+}
+
+async function setReviewOutputs(io: ActionIo, outcome: ReviewOutcome): Promise<void> {
+  await io.setOutput("outcome", JSON.stringify(outcome));
+  if (outcome.run !== undefined) {
+    await io.setOutput("run-id", outcome.run.runId);
+    await io.setOutput("run-metadata", JSON.stringify(outcome.run));
+  }
 }
 
 export async function runAction(
@@ -218,6 +232,6 @@ export async function runAction(
     reviewDependencies(env, io),
   );
 
-  await io.setOutput("outcome", JSON.stringify(outcome));
+  await setReviewOutputs(io, outcome);
   return outcome;
 }
