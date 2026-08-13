@@ -30,7 +30,7 @@ jobs:
         uses: D4NZ-jpg/diffowl@main
 ```
 
-The `outcome` output contains the typed Review outcome as JSON. The engine returns data only; GitHub publication remains the responsibility of an adapter.
+The Action reads `.diffowl.json` from the pull request's base commit. It never reads policy from the pull-request head or synthetic merge commit, so a pull request cannot weaken its own review policy. The `outcome` output contains the typed Review outcome as JSON. Invalid, missing, or security-weakening policy produces a `configuration_failure` outcome. The engine returns data only; GitHub publication remains the responsibility of an adapter.
 
 A complete example is in [`examples/representative-repository`](examples/representative-repository).
 
@@ -41,10 +41,14 @@ Use Node.js 20 or newer.
 ```bash
 npm install
 npm run build
-node dist/cli.js review --input tests/fixtures/pull-request.json
+node dist/cli.js review \
+  --input tests/fixtures/pull-request.json \
+  --policy tests/fixtures/project-policy.json
 ```
 
-The input file has this shape:
+The CLI reads the policy path supplied by the local user. Its outcome marks the policy source as `local_invocation`; local policy execution is not CI trust evidence.
+
+The pull-request input file has this shape:
 
 ```json
 {
@@ -55,6 +59,26 @@ The input file has this shape:
   "diff": "diff --git ..."
 }
 ```
+
+## Project policy
+
+Project policy is JSON:
+
+```json
+{
+  "version": 1,
+  "scope": {
+    "includePaths": ["src/**"],
+    "excludePaths": ["dist/**"]
+  },
+  "limits": {
+    "reviewTimeoutSeconds": 600,
+    "maxFindings": 25
+  }
+}
+```
+
+Policy fields are closed: unsupported active fields fail configuration instead of being ignored. `reviewTimeoutSeconds` must not exceed 3600, and `maxFindings` must not exceed 100. These ceilings cannot be overridden by repository or local policy.
 
 ## Development
 

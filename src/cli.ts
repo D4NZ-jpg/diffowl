@@ -20,7 +20,9 @@ const processIo: CliIo = {
   stderr: (text) => process.stderr.write(text),
 };
 
-function isPullRequestInput(value: unknown): value is PullRequestInput {
+type CliPullRequestInput = Omit<PullRequestInput, "policy">;
+
+function isPullRequestInput(value: unknown): value is CliPullRequestInput {
   if (typeof value !== "object" || value === null) {
     return false;
   }
@@ -36,32 +38,52 @@ function isPullRequestInput(value: unknown): value is PullRequestInput {
   );
 }
 
-function inputPathFrom(args: readonly string[]): string | undefined {
-  if (args[0] !== "review" || args[1] !== "--input") {
+interface CliPaths {
+  input: string;
+  policy: string;
+}
+
+function pathsFrom(args: readonly string[]): CliPaths | undefined {
+  if (
+    args.length !== 5 ||
+    args[0] !== "review" ||
+    args[1] !== "--input" ||
+    args[3] !== "--policy" ||
+    args[2] === undefined ||
+    args[4] === undefined
+  ) {
     return undefined;
   }
 
-  return args[2];
+  return { input: args[2], policy: args[4] };
 }
 
 export async function runCli(
   args: readonly string[],
   io: CliIo = processIo,
 ): Promise<number> {
-  const inputPath = inputPathFrom(args);
-  if (inputPath === undefined) {
-    io.stderr("Usage: diffowl review --input <pull-request.json>\n");
+  const paths = pathsFrom(args);
+  if (paths === undefined) {
+    io.stderr(
+      "Usage: diffowl review --input <pull-request.json> --policy <local-policy.json>\n",
+    );
     return 2;
   }
 
   try {
-    const input: unknown = JSON.parse(await io.readFile(inputPath, "utf8"));
+    const input: unknown = JSON.parse(await io.readFile(paths.input, "utf8"));
     if (!isPullRequestInput(input)) {
       io.stderr("Pull-request input does not match the required schema.\n");
       return 2;
     }
 
-    const outcome = await runReview(input);
+    const outcome = await runReview({
+      ...input,
+      policy: {
+        source: { type: "local_invocation", path: paths.policy },
+        contents: await io.readFile(paths.policy, "utf8"),
+      },
+    });
     io.stdout(`${JSON.stringify(outcome)}\n`);
     return 0;
   } catch (error) {

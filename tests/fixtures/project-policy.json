@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "scope": {
+    "includePaths": ["src/**"],
+    "excludePaths": ["dist/**"]
+  },
+  "limits": {
+    "reviewTimeoutSeconds": 600,
+    "maxFindings": 25
+  }
+}

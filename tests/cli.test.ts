@@ -8,6 +8,9 @@ import { runCli } from "../src/cli.js";
 const fixturePath = fileURLToPath(
   new URL("./fixtures/pull-request.json", import.meta.url),
 );
+const policyPath = fileURLToPath(
+  new URL("./fixtures/project-policy.json", import.meta.url),
+);
 
 describe("diffowl review", () => {
   it("runs the Review engine for pull-request input", async () => {
@@ -15,7 +18,7 @@ describe("diffowl review", () => {
     let stderr = "";
 
     const exitCode = await runCli(
-      ["review", "--input", fixturePath],
+      ["review", "--input", fixturePath, "--policy", policyPath],
       {
         readFile,
         stdout: (text) => {
@@ -38,6 +41,23 @@ describe("diffowl review", () => {
         headSha: "2222222222222222222222222222222222222222",
       },
       reason: "The tracer path does not analyze changes yet.",
+      policy: {
+        source: {
+          type: "local_invocation",
+          path: policyPath,
+        },
+        effective: {
+          version: 1,
+          scope: {
+            includePaths: ["src/**"],
+            excludePaths: ["dist/**"],
+          },
+          limits: {
+            reviewTimeoutSeconds: 600,
+            maxFindings: 25,
+          },
+        },
+      },
     });
   });
 });

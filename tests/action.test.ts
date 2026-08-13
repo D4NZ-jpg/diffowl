@@ -9,6 +9,12 @@ const eventPath = fileURLToPath(
   new URL("./fixtures/github-pull-request-event.json", import.meta.url),
 );
 
+const representativePolicy = JSON.stringify({
+  version: 1,
+  scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
+  limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
+});
+
 const representativeDiff = [
   "diff --git a/message.txt b/message.txt",
   "index ce01362..94954ab 100644",
@@ -33,6 +39,11 @@ describe("Review OWL Action", () => {
           expect(headSha).toBe("2222222222222222222222222222222222222222");
           return representativeDiff;
         },
+        readPolicy: async (revision, path) => {
+          expect(revision).toBe("1111111111111111111111111111111111111111");
+          expect(path).toBe(".diffowl.json");
+          return representativePolicy;
+        },
         setOutput: async (name, value) => {
           outputs.set(name, value);
         },
@@ -48,6 +59,14 @@ describe("Review OWL Action", () => {
         headSha: "2222222222222222222222222222222222222222",
       },
       reason: "The tracer path does not analyze changes yet.",
+      policy: {
+        source: {
+          type: "trusted_base_branch",
+          revision: "1111111111111111111111111111111111111111",
+          path: ".diffowl.json",
+        },
+        effective: JSON.parse(representativePolicy),
+      },
     });
     expect(JSON.parse(outputs.get("outcome") ?? "")).toEqual(outcome);
   });

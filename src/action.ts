@@ -1,7 +1,11 @@
 import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
-import { type ReviewOutcome, runReview } from "./review-engine.js";
+import {
+  PROJECT_POLICY_PATH,
+  type ReviewOutcome,
+  runReview,
+} from "./review-engine.js";
 
 interface GitHubPullRequestEvent {
   repository: { full_name: string };
@@ -15,6 +19,7 @@ interface GitHubPullRequestEvent {
 export interface ActionIo {
   readFile(path: string, encoding: "utf8"): Promise<string>;
   readDiff(baseSha: string, headSha: string): Promise<string>;
+  readPolicy(revision: string, path: string): Promise<string | undefined>;
   setOutput(name: string, value: string): Promise<void>;
 }
 
@@ -35,10 +40,38 @@ function readGitDiff(baseSha: string, headSha: string): Promise<string> {
   });
 }
 
+function readGitFileAtRevision(
+  revision: string,
+  path: string,
+): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "git",
+      ["show", `${revision}:${path}`],
+      { encoding: "utf8", maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error === null) {
+          resolve(stdout);
+          return;
+        }
+        if (
+          stderr.includes("does not exist in") ||
+          stderr.includes("exists on disk, but not in")
+        ) {
+          resolve(undefined);
+          return;
+        }
+        reject(error);
+      },
+    );
+  });
+}
+
 function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
   return {
     readFile,
     readDiff: readGitDiff,
+    readPolicy: readGitFileAtRevision,
     setOutput: async (name, value) => {
       const outputPath = env.GITHUB_OUTPUT;
       if (outputPath === undefined) {
@@ -115,6 +148,14 @@ export async function runAction(
     baseSha: pullRequest.base.sha,
     headSha: pullRequest.head.sha,
     diff: await io.readDiff(pullRequest.base.sha, pullRequest.head.sha),
+    policy: {
+      source: {
+        type: "trusted_base_branch",
+        revision: pullRequest.base.sha,
+        path: PROJECT_POLICY_PATH,
+      },
+      contents: await io.readPolicy(pullRequest.base.sha, PROJECT_POLICY_PATH),
+    },
   });
 
   await io.setOutput("outcome", JSON.stringify(outcome));
