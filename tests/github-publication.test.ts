@@ -8,8 +8,10 @@ import {
   publishReviewOutcome,
 } from "../src/github-publication.js";
 import {
+  FINDING_COMMENT_MARKER,
   GITHUB_BODY_LIMIT,
   SUMMARY_MARKER,
+  SUPERSEDED_FINDING_MARKER,
   checkConclusion,
   checkOutput,
   findingBody,
@@ -137,6 +139,7 @@ function outcome(type: ReviewOutcome["type"]): ReviewOutcome {
   }
 }
 
+// oxlint-disable-next-line max-lines-per-function
 function fakeTransport(
   options: {
     existingSummary?: boolean;
@@ -144,12 +147,16 @@ function fakeTransport(
     commentPages?: IssueCommentPage[];
     failPath?: string;
     currentHeads?: string[];
+    reviewComments?: IssueCommentPage;
+    checkRuns?: number[];
   } = {},
 ) {
   const requests: GitHubRequest[] = [];
   const comments: IssueCommentPage = options.existingSummary
     ? [{ id: 31, body: SUMMARY_MARKER, user: { login: "github-actions[bot]" } }]
     : [{ id: 30, body: SUMMARY_MARKER, user: { login: "someone-else" } }];
+  const reviewComments: IssueCommentPage = options.reviewComments ?? [];
+  const checkRuns = options.checkRuns ?? [];
   let seededPages = false;
   let headRead = 0;
   // oxlint-disable-next-line complexity
@@ -158,10 +165,21 @@ function fakeTransport(
     if (options.failPath !== undefined && request.path.endsWith(options.failPath)) {
       throw new Error("injected publication failure");
     }
-    if (request.method === "GET" && request.path.includes("/pulls/")) {
+    if (request.method === "GET" && /\/pulls\/\d+$/u.test(request.path)) {
       const head = options.currentHeads?.[headRead] ?? options.currentHead ?? target.headSha;
       headRead += 1;
       return { head: { sha: head } };
+    }
+    if (
+      request.method === "GET" &&
+      request.path.includes("/pulls/") &&
+      request.path.includes("/comments")
+    ) {
+      const page = Number(new URL(request.path, "https://example.test").searchParams.get("page"));
+      return reviewComments.slice((page - 1) * 100, page * 100);
+    }
+    if (request.method === "GET" && request.path.includes("/check-runs")) {
+      return { check_runs: checkRuns.map((id) => ({ id })) };
     }
     if (request.method === "GET") {
       const page = Number(new URL(request.path, "https://example.test").searchParams.get("page"));
@@ -177,7 +195,17 @@ function fakeTransport(
     }
     if (request.path.endsWith("/reviews")) return { id: 41 };
     if (request.path.endsWith("/check-runs")) return { id: 42 };
-    const patchedCommentId = /\/issues\/comments\/(\d+)$/.exec(request.path)?.[1];
+    const patchedReviewCommentId = /\/pulls\/comments\/(\d+)$/u.exec(request.path)?.[1];
+    if (patchedReviewCommentId !== undefined) {
+      const existing = reviewComments.find(
+        (comment) => comment.id === Number(patchedReviewCommentId),
+      );
+      if (existing !== undefined) existing.body = (request.body as { body: string }).body;
+      return { id: Number(patchedReviewCommentId) };
+    }
+    const patchedCheckRunId = /\/check-runs\/(\d+)$/u.exec(request.path)?.[1];
+    if (patchedCheckRunId !== undefined) return { id: Number(patchedCheckRunId) };
+    const patchedCommentId = /\/issues\/comments\/(\d+)$/u.exec(request.path)?.[1];
     if (patchedCommentId !== undefined) {
       const existing = comments.find((comment) => comment.id === Number(patchedCommentId));
       if (existing !== undefined) existing.body = (request.body as { body: string }).body;
@@ -190,7 +218,7 @@ function fakeTransport(
     });
     return { id: 43 };
   };
-  return { comments, requests, transport };
+  return { comments, requests, reviewComments, transport };
 }
 
 function providerFailureBeforeRunResult() {
@@ -484,6 +512,36 @@ function publicationAdapterTests(): void {
         body: { body: expect.stringContaining("superseded-summary") },
       }),
     );
+  });
+
+  it("de-emphasizes stale finding threads and same-head check runs", async () => {
+    const { requests, reviewComments, transport } = fakeTransport({
+      checkRuns: [21, 42],
+      reviewComments: [
+        {
+          id: 51,
+          body: `${FINDING_COMMENT_MARKER}\nold finding`,
+          user: { login: "github-actions[bot]" },
+        },
+        {
+          id: 52,
+          body: `${FINDING_COMMENT_MARKER}\nhuman text`,
+          user: { login: "someone-else" },
+        },
+      ],
+    });
+    await publishReviewOutcome(transport, target, outcome("findings"), authorization);
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "PATCH",
+        path: expect.stringContaining("/check-runs/21"),
+        body: expect.objectContaining({ conclusion: "neutral" }),
+      }),
+    );
+    expect(requests.some((request) => request.path.endsWith("/check-runs/42"))).toBe(false);
+    expect(reviewComments[0]?.body).toContain(SUPERSEDED_FINDING_MARKER);
+    expect(reviewComments[0]?.body).toContain("#issuecomment-43");
+    expect(reviewComments[1]?.body).toContain("human text");
   });
 
   it("updates the existing github-actions summary and skips an unanchored review", async () => {

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  staleFindingCommentIds,
+  supersedeStaleCheckRuns,
+  supersedeStaleFindingComments,
+} from "./github-freshness.js";
 import type { MaterialFinding, ReviewOutcome } from "./review-engine.js";
 import {
   checkConclusion,
@@ -14,6 +19,7 @@ import { beginSummaryPublication, finalizeSummaryPublication } from "./github-su
 
 const API_VERSION = "2022-11-28";
 const MAX_ANNOTATIONS = 50;
+const REVIEW_CHECK_NAME = "Review OWL";
 
 export interface GitHubRequest {
   method: "GET" | "POST" | "PATCH";
@@ -125,7 +131,7 @@ async function publishCheck(
     method: "POST",
     path: `/repos/${target.repository}/check-runs`,
     body: {
-      name: "Review OWL",
+      name: REVIEW_CHECK_NAME,
       head_sha: target.headSha,
       status: "completed",
       conclusion: checkConclusion(outcome),
@@ -173,8 +179,10 @@ export async function publishReviewOutcome(
   const unanchored = active.filter((finding) => !inlineFinding(finding, lines));
   const runMarker = randomUUID();
   const publishingId = await beginSummaryPublication(request, target, runMarker);
+  const staleFindingComments = await staleFindingCommentIds(request, target);
   const review = await publishReview(request, target, inline);
   const check = await publishCheck(request, target, validated, inline);
+  await supersedeStaleCheckRuns(request, target, check.id);
   await assertCurrentHead(request, target);
   const summaryCommentId = await finalizeSummaryPublication(
     request,
@@ -183,6 +191,7 @@ export async function publishReviewOutcome(
     publishingId,
     summaryBody(validated, unanchored, review?.htmlUrl),
   );
+  await supersedeStaleFindingComments(request, target, staleFindingComments, summaryCommentId);
   return {
     headSha: target.headSha,
     ...(review === undefined ? {} : { reviewId: review.id }),
