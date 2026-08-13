@@ -103,6 +103,17 @@ export type {
   UnexpectedSyntheticFinding,
 } from "./synthetic-evaluation.js";
 export {
+  REQUIRED_V1_THREAT_TEST_IDS,
+  createV1ReleaseReportCard,
+  evaluateV1ReleaseGate,
+} from "./release-gate.js";
+export type {
+  ThreatTestResult,
+  V1ReleaseGateResult,
+  V1ReleaseReportCard,
+  V1ThreatTestId,
+} from "./release-gate.js";
+export {
   createFindingFingerprint,
   parseFindingFingerprint,
   FINDING_FINGERPRINT_VERSION,
