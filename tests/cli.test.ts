@@ -12,6 +12,23 @@ const fixturePath = fileURLToPath(new URL("./fixtures/pull-request.json", import
 const policyPath = fileURLToPath(new URL("./fixtures/project-policy.json", import.meta.url));
 const stateDirectories = temporaryStateDirectories("diffowl-cli-state-");
 
+async function invokeCli(args: readonly string[]) {
+  let stdout = "";
+  let stderr = "";
+  const exitCode = await runCli(args, {
+    readFile,
+    stdout: (text) => {
+      stdout += text;
+    },
+    stderr: (text) => {
+      stderr += text;
+    },
+    credentialProfiles: { default: "local" },
+    executeRole: async (request) => emptyRoleResult(request),
+  });
+  return { exitCode, stdout, stderr };
+}
+
 afterEach(stateDirectories.removeAll);
 
 // The suite has one integration-style example that asserts the complete CLI contract.
@@ -44,7 +61,24 @@ describe("diffowl review", () => {
       step: { role: "reviewer", purpose: "generate_candidates" },
       credentials: "local",
     });
-    expect(JSON.parse(stdout)).toEqual(
+    const report = JSON.parse(stdout) as Record<string, unknown>;
+    expect(report).toMatchObject({
+      adapter: "local_cli",
+      mode: "dry-run",
+      ciTrusted: false,
+      publishing: {
+        requested: false,
+        status: "denied_local_invocation",
+      },
+      findings: [],
+      advisorySuggestions: [],
+      diagnostics: {
+        outcomeType: "clean",
+        validationAttemptCount: 0,
+        providerArtifactCount: 3,
+      },
+    });
+    expect(report.outcome).toEqual(
       completedReviewOutcome({
         trust: {
           class: "local_cli",
@@ -68,6 +102,25 @@ describe("diffowl review", () => {
     );
   });
 
+  it("labels explicit publishing mode as local and untrusted", async () => {
+    const { exitCode, stdout } = await invokeCli([
+      "review",
+      "--input",
+      fixturePath,
+      "--policy",
+      policyPath,
+      "--publish",
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      mode: "publish",
+      ciTrusted: false,
+      trust: { class: "local_cli", capabilities: { publishing: "denied" } },
+      publishing: { requested: true, status: "denied_local_invocation" },
+    });
+  });
+
   it("persists Review runs across CLI invocations", async () => {
     const stateDirectory = await stateDirectories.create();
     const args = [
@@ -82,19 +135,16 @@ describe("diffowl review", () => {
     const outcomes: Array<Record<string, unknown>> = [];
 
     const invoke = async () => {
-      let stdout = "";
-      expect(
-        await runCli(args, {
-          readFile,
-          stdout: (text) => {
-            stdout += text;
-          },
-          stderr: () => undefined,
-          credentialProfiles: { default: "local" },
-          executeRole: async (request) => emptyRoleResult(request),
-        }),
-      ).toBe(0);
-      outcomes.push(JSON.parse(stdout) as Record<string, unknown>);
+      const { exitCode, stdout } = await invokeCli(args);
+      expect(exitCode).toBe(0);
+      const report = JSON.parse(stdout) as Record<string, unknown>;
+      expect(report).toMatchObject({
+        adapter: "local_cli",
+        diagnostics: { ledgerEntryCount: 0 },
+        ledger: { version: 1, entries: [] },
+        runRecord: { version: 1, trustClass: "local_cli" },
+      });
+      outcomes.push(report.outcome as Record<string, unknown>);
     };
     await invoke();
     await invoke();
