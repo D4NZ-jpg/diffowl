@@ -11,6 +11,8 @@ outputs:
     description: The persisted Review run identifier, when state-directory is configured.
   run-metadata:
     description: Safe persisted Review run metadata as JSON, when state-directory is configured.
+  publication:
+    description: Adapter-owned GitHub publication receipts as JSON when GITHUB_TOKEN is configured.
 runs:
   using: node24
   main: dist/action/index.js

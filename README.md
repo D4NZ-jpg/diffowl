@@ -18,6 +18,9 @@ on:
 
 permissions:
   contents: read
+  checks: write
+  pull-requests: write
+  issues: write
 
 jobs:
   review:
@@ -31,6 +34,7 @@ jobs:
         with:
           state-directory: ${{ github.workspace }}/.diffowl-state
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
@@ -43,7 +47,7 @@ The Action reads `.diffowl.json` from the pull request's base commit. It never r
 
 Same-repository pull requests may use only the trusted credential profiles referenced by base-branch role profiles. The repository policy names profiles but does not contain secrets or grant secret-store access. The Action maps `default` to RunCell environment credentials by default. They are also eligible for configured validation commands only within the externally isolated GitHub job and the policy timeout. Fork and Dependabot pull requests are untrusted: validation commands, secrets, write tokens, privileged tools, and publishing are denied. They receive a `partial_coverage` outcome while the tracer can perform only static review. Unsupported or unsafe event contexts receive a `policy_skip`; invalid, missing, over-budget, or security-weakening policy receives a `configuration_failure`. None of these cases can appear clean.
 
-The engine returns data only; GitHub publication remains the responsibility of an adapter. A future privileged publisher must use the separate SHA-bound, data-only capability class and cannot execute pull-request code.
+The engine returns data only; GitHub publication remains the responsibility of the Action adapter. When `GITHUB_TOKEN` is configured, the adapter verifies the pull request's exact current head before publishing material Findings as review threads, a completed check run with annotations and machine-readable outcome JSON, and one maintained summary comment. Publication receipts are returned separately through the `publication` output and never enter Review engine semantics. The publisher uses the separate SHA-bound, bounded, data-only capability class and cannot execute pull-request code. Omit `GITHUB_TOKEN` to keep publication disabled.
 
 Completed reviews return either `clean` or `findings` with `coverage: "completed_permitted"`. `clean` means the completed permitted review found no material findings; it is not proof of correctness. Material findings and non-blocking `advisorySuggestions` use separate fields. Each material finding includes its location, impact, evidence objects, lifecycle state, and verification state.
 

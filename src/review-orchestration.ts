@@ -305,7 +305,7 @@ function decodeQuotedGitPath(value: string): string | undefined {
   return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes));
 }
 
-function decodeGitPath(value: string): string | undefined {
+export function decodeGitPath(value: string): string | undefined {
   try {
     const path = value.startsWith('"') ? decodeQuotedGitPath(value) : value;
     return path?.startsWith("b/") === true ? path.slice(2) : undefined;

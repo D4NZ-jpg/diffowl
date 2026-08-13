@@ -97,6 +97,7 @@ describe("installable Review OWL Action", () => {
     expect(metadata).toContain("state-directory:");
     expect(metadata).toContain("run-id:");
     expect(metadata).toContain("run-metadata:");
+    expect(metadata).toContain("publication:");
 
     const { repository, baseSha, headSha } = await createRepresentativeRepository();
     const eventPath = await writePullRequestEvent(repository, baseSha, headSha);
@@ -113,7 +114,7 @@ describe("installable Review OWL Action", () => {
     };
     const result = await exec("node", [join(projectRoot, "dist/action/index.js")], {
       cwd: repository,
-      env: actionEnvironment,
+      env: { ...actionEnvironment, GITHUB_TOKEN: undefined },
     });
 
     const outcome = JSON.parse(result.stdout);
