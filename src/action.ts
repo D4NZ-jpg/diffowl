@@ -3,6 +3,7 @@ import { appendFile, readFile } from "node:fs/promises";
 
 import { addedLinesFromDiff } from "./github-diff.js";
 import {
+  REQUIRED_PUBLICATION_SURFACES,
   createGitHubTransport,
   type PublicationAuthorization,
   type PublicationReceipt,
@@ -201,6 +202,19 @@ async function setReviewOutputs(io: ActionIo, outcome: ReviewOutcome): Promise<v
   }
 }
 
+function publicationFailureOutcome(outcome: ReviewOutcome, error: unknown): ReviewOutcome {
+  if (!("pullRequest" in outcome) || !("policy" in outcome)) return outcome;
+  const reason = error instanceof Error ? error.message : "GitHub publication failed.";
+  return {
+    type: "internal_failure",
+    reason,
+    trust: outcome.trust,
+    pullRequest: outcome.pullRequest,
+    policy: outcome.policy,
+    ...(outcome.run === undefined ? {} : { run: outcome.run }),
+  };
+}
+
 async function publishActionOutcome(
   io: ActionIo,
   repository: string,
@@ -212,17 +226,22 @@ async function publishActionOutcome(
   if (io.publishOutcome === undefined || outcome.trust.class !== "trusted_same_repo_pull_request") {
     return;
   }
-  const receipt = await io.publishOutcome(
-    {
-      repository,
-      pullRequestNumber: pullRequest.number,
-      headSha: pullRequest.head.sha,
-      changedLines,
-    },
-    outcome,
-    { sourceRunVerified: true },
-  );
-  await io.setOutput("publication", JSON.stringify(receipt));
+  try {
+    const receipt = await io.publishOutcome(
+      {
+        repository,
+        pullRequestNumber: pullRequest.number,
+        headSha: pullRequest.head.sha,
+        changedLines,
+      },
+      outcome,
+      { sourceRunVerified: true, surfaces: REQUIRED_PUBLICATION_SURFACES },
+    );
+    await io.setOutput("publication", JSON.stringify(receipt));
+  } catch (error) {
+    await setReviewOutputs(io, publicationFailureOutcome(outcome, error));
+    throw error;
+  }
 }
 
 // oxlint-disable-next-line max-lines-per-function

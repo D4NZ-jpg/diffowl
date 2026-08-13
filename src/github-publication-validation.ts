@@ -1,7 +1,11 @@
 import type { ReviewOutcome } from "./review-engine.js";
 import { classifyTrust } from "./trust.js";
 import { parseGitHubReviewOutcome } from "./github-outcome-schema.js";
-import type { PublicationAuthorization, PublicationTarget } from "./github-publication.js";
+import {
+  REQUIRED_PUBLICATION_SURFACES,
+  type PublicationAuthorization,
+  type PublicationTarget,
+} from "./github-publication.js";
 
 // Allows the maximum configured diff, 100 repository evidence items, 10 validation
 // outputs, and bounded execution metadata while rejecting unbounded publisher input.
@@ -13,6 +17,15 @@ function matchesTarget(outcome: ReviewOutcome, target: PublicationTarget): boole
     outcome.pullRequest.repository === target.repository &&
     outcome.pullRequest.number === target.pullRequestNumber &&
     outcome.pullRequest.headSha === target.headSha
+  );
+}
+
+function surfacesAllowed(authorization: PublicationAuthorization | undefined): boolean {
+  const surfaces = authorization?.surfaces;
+  return (
+    surfaces !== undefined &&
+    surfaces.length === REQUIRED_PUBLICATION_SURFACES.length &&
+    REQUIRED_PUBLICATION_SURFACES.every((surface) => surfaces.includes(surface))
   );
 }
 
@@ -37,7 +50,7 @@ export function validatePublicationOutcome(
       sizeWithinLimit: Buffer.byteLength(encoded) <= MAX_PUBLICATION_OUTCOME_BYTES,
       sourceRunVerified: authorization?.sourceRunVerified === true,
       headShaMatches: headMatches,
-      surfacesAllowed: true,
+      surfacesAllowed: surfacesAllowed(authorization),
       resultCurrent: headMatches && sourceMatches,
     },
   });
