@@ -19,6 +19,8 @@ export type GitHubCheckConclusion =
 export const SUMMARY_MARKER = "<!-- diffowl:current-summary:v1 -->";
 export const PUBLISHING_SUMMARY_MARKER = "<!-- diffowl:publishing-summary:v1";
 export const SUPERSEDED_SUMMARY_MARKER = "<!-- diffowl:superseded-summary:v1 -->";
+export const FINDING_COMMENT_MARKER = "### Review OWL material Finding";
+export const SUPERSEDED_FINDING_MARKER = "<!-- diffowl:superseded-finding:v1 -->";
 export const GITHUB_BODY_LIMIT = 60 * 1024;
 
 const conclusions: Record<ReviewOutcome["type"], GitHubCheckConclusion> = {
@@ -88,7 +90,7 @@ export function findingBody(finding: MaterialFinding): string {
   ].join("\n");
   return truncateUtf8(
     [
-      "### Review OWL material Finding",
+      FINDING_COMMENT_MARKER,
       "",
       `**Problem:** ${finding.summary}`,
       "",
@@ -181,6 +183,14 @@ export function supersededSummaryBody(currentSummaryCommentId?: number): string 
       ? "A replacement publication is in progress."
       : `The current summary is #issuecomment-${currentSummaryCommentId}.`;
   return `${SUPERSEDED_SUMMARY_MARKER}\nThis Review OWL summary is not authoritative. ${destination}`;
+}
+
+export function supersededFindingBody(currentSummaryCommentId?: number): string {
+  const destination =
+    currentSummaryCommentId === undefined
+      ? "A replacement publication is in progress."
+      : `The current summary is #issuecomment-${currentSummaryCommentId}.`;
+  return `${SUPERSEDED_FINDING_MARKER}\nThis Review OWL Finding thread is from a superseded publication and is not the current recommendation. ${destination}`;
 }
 
 function machineOutcome(outcome: ReviewOutcome): { json: string; complete: boolean } {
