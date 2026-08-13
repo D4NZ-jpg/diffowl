@@ -3,10 +3,7 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-import {
-  type PullRequestInput,
-  runReview,
-} from "./review-engine.js";
+import { type PullRequestInput, runReview } from "./review-engine.js";
 
 export interface CliIo {
   readFile(path: string, encoding: "utf8"): Promise<string>;
@@ -58,15 +55,10 @@ function pathsFrom(args: readonly string[]): CliPaths | undefined {
   return { input: args[2], policy: args[4] };
 }
 
-export async function runCli(
-  args: readonly string[],
-  io: CliIo = processIo,
-): Promise<number> {
+export async function runCli(args: readonly string[], io: CliIo = processIo): Promise<number> {
   const paths = pathsFrom(args);
   if (paths === undefined) {
-    io.stderr(
-      "Usage: diffowl review --input <pull-request.json> --policy <local-policy.json>\n",
-    );
+    io.stderr("Usage: diffowl review --input <pull-request.json> --policy <local-policy.json>\n");
     return 2;
   }
 
@@ -94,9 +86,6 @@ export async function runCli(
 }
 
 const invokedPath = process.argv[1];
-if (
-  invokedPath !== undefined &&
-  import.meta.url === pathToFileURL(invokedPath).href
-) {
+if (invokedPath !== undefined && import.meta.url === pathToFileURL(invokedPath).href) {
   process.exitCode = await runCli(process.argv.slice(2));
 }

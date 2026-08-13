@@ -1,11 +1,7 @@
 import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
-import {
-  PROJECT_POLICY_PATH,
-  type ReviewOutcome,
-  runReview,
-} from "./review-engine.js";
+import { PROJECT_POLICY_PATH, type ReviewOutcome, runReview } from "./review-engine.js";
 
 interface GitHubPullRequestEvent {
   repository: { full_name: string };
@@ -40,10 +36,7 @@ function readGitDiff(baseSha: string, headSha: string): Promise<string> {
   });
 }
 
-function readGitFileAtRevision(
-  revision: string,
-  path: string,
-): Promise<string | undefined> {
+function readGitFileAtRevision(revision: string, path: string): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
@@ -54,10 +47,7 @@ function readGitFileAtRevision(
           resolve(stdout);
           return;
         }
-        if (
-          stderr.includes("does not exist in") ||
-          stderr.includes("exists on disk, but not in")
-        ) {
+        if (stderr.includes("does not exist in") || stderr.includes("exists on disk, but not in")) {
           resolve(undefined);
           return;
         }

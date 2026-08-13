@@ -13,9 +13,7 @@ const temporaryRepositories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryRepositories.splice(0).map((path) =>
-      rm(path, { recursive: true, force: true }),
-    ),
+    temporaryRepositories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
 
@@ -24,78 +22,77 @@ async function git(repository: string, ...args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
+async function createRepresentativeRepository(): Promise<{
+  repository: string;
+  baseSha: string;
+  headSha: string;
+}> {
+  const repository = await mkdtemp(join(tmpdir(), "diffowl-action-"));
+  temporaryRepositories.push(repository);
+  await git(repository, "init", "--quiet");
+  await git(repository, "config", "user.name", "Review OWL Test");
+  await git(repository, "config", "user.email", "review-owl@example.com");
+  await writeFile(join(repository, "message.txt"), "hello\n", "utf8");
+  await writeFile(
+    join(repository, ".diffowl.json"),
+    JSON.stringify({
+      version: 1,
+      scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
+      limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
+    }),
+    "utf8",
+  );
+  await git(repository, "add", "message.txt", ".diffowl.json");
+  await git(repository, "commit", "--quiet", "-m", "base");
+  const baseSha = await git(repository, "rev-parse", "HEAD");
+  await writeFile(join(repository, "message.txt"), "hello owl\n", "utf8");
+  await writeFile(
+    join(repository, ".diffowl.json"),
+    JSON.stringify({
+      version: 1,
+      scope: { includePaths: ["**"], excludePaths: [] },
+      limits: { reviewTimeoutSeconds: 3_601, maxFindings: 100 },
+    }),
+    "utf8",
+  );
+  await git(repository, "commit", "--quiet", "-am", "head");
+  return { repository, baseSha, headSha: await git(repository, "rev-parse", "HEAD") };
+}
+
+async function writePullRequestEvent(
+  repository: string,
+  baseSha: string,
+  headSha: string,
+): Promise<string> {
+  const eventPath = join(repository, "event.json");
+  await writeFile(
+    eventPath,
+    JSON.stringify({
+      repository: { full_name: "example/review-target" },
+      pull_request: {
+        number: 42,
+        base: { sha: baseSha, repo: { full_name: "example/review-target" } },
+        head: { sha: headSha, repo: { full_name: "example/review-target" } },
+      },
+    }),
+    "utf8",
+  );
+  return eventPath;
+}
+
 describe("installable Review OWL Action", () => {
   it("runs the bundled Action in a representative same-repo checkout", async () => {
     const metadata = await readFile(join(projectRoot, "action.yml"), "utf8");
     expect(metadata).toContain("using: node20");
     expect(metadata).toContain("main: dist/action/index.js");
 
-    const repository = await mkdtemp(join(tmpdir(), "diffowl-action-"));
-    temporaryRepositories.push(repository);
-    await git(repository, "init", "--quiet");
-    await git(repository, "config", "user.name", "Review OWL Test");
-    await git(repository, "config", "user.email", "review-owl@example.com");
-
-    await writeFile(join(repository, "message.txt"), "hello\n", "utf8");
-    await writeFile(
-      join(repository, ".diffowl.json"),
-      JSON.stringify({
-        version: 1,
-        scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
-        limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
-      }),
-      "utf8",
-    );
-    await git(repository, "add", "message.txt", ".diffowl.json");
-    await git(repository, "commit", "--quiet", "-m", "base");
-    const baseSha = await git(repository, "rev-parse", "HEAD");
-
-    await writeFile(join(repository, "message.txt"), "hello owl\n", "utf8");
-    await writeFile(
-      join(repository, ".diffowl.json"),
-      JSON.stringify({
-        version: 1,
-        scope: { includePaths: ["**"], excludePaths: [] },
-        limits: { reviewTimeoutSeconds: 3_601, maxFindings: 100 },
-      }),
-      "utf8",
-    );
-    await git(repository, "commit", "--quiet", "-am", "head");
-    const headSha = await git(repository, "rev-parse", "HEAD");
-
-    const eventPath = join(repository, "event.json");
+    const { repository, baseSha, headSha } = await createRepresentativeRepository();
+    const eventPath = await writePullRequestEvent(repository, baseSha, headSha);
     const outputPath = join(repository, "action-output");
-    await writeFile(
-      eventPath,
-      JSON.stringify({
-        repository: { full_name: "example/review-target" },
-        pull_request: {
-          number: 42,
-          base: {
-            sha: baseSha,
-            repo: { full_name: "example/review-target" },
-          },
-          head: {
-            sha: headSha,
-            repo: { full_name: "example/review-target" },
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    const result = await exec(
-      "node",
-      [join(projectRoot, "dist/action/index.js")],
-      {
-        cwd: repository,
-        env: {
-          ...process.env,
-          GITHUB_EVENT_PATH: eventPath,
-          GITHUB_OUTPUT: outputPath,
-        },
-      },
-    );
+    const result = await exec("node", [join(projectRoot, "dist/action/index.js")], {
+      cwd: repository,
+      env: { ...process.env, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath },
+    });
 
     const outcome = JSON.parse(result.stdout);
     expect(outcome).toMatchObject({
@@ -107,26 +104,14 @@ describe("installable Review OWL Action", () => {
         headSha,
       },
       policy: {
-        source: {
-          type: "trusted_base_branch",
-          revision: baseSha,
-          path: ".diffowl.json",
-        },
+        source: { type: "trusted_base_branch", revision: baseSha, path: ".diffowl.json" },
         effective: {
           version: 1,
-          scope: {
-            includePaths: ["src/**"],
-            excludePaths: ["dist/**"],
-          },
-          limits: {
-            reviewTimeoutSeconds: 600,
-            maxFindings: 25,
-          },
+          scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
+          limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
         },
       },
     });
-    expect(await readFile(outputPath, "utf8")).toBe(
-      `outcome=${JSON.stringify(outcome)}\n`,
-    );
+    expect(await readFile(outputPath, "utf8")).toBe(`outcome=${JSON.stringify(outcome)}\n`);
   });
 });

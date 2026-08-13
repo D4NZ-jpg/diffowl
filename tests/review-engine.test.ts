@@ -1,15 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  type PullRequestInput,
-  runReview,
-} from "../src/review-engine.js";
+import { type PullRequestInput, runReview } from "../src/review-engine.js";
 
-const representativePullRequest: PullRequestInput = {
+const reviewedPullRequest = {
   repository: "example/review-target",
   number: 42,
   baseSha: "1111111111111111111111111111111111111111",
   headSha: "2222222222222222222222222222222222222222",
+};
+
+const effectivePolicy = {
+  version: 1,
+  scope: {
+    includePaths: ["src/**"],
+    excludePaths: ["dist/**"],
+  },
+  limits: {
+    reviewTimeoutSeconds: 600,
+    maxFindings: 25,
+  },
+};
+
+const representativePullRequest: PullRequestInput = {
+  ...reviewedPullRequest,
   diff: [
     "diff --git a/message.txt b/message.txt",
     "index ce01362..94954ab 100644",
@@ -23,20 +36,10 @@ const representativePullRequest: PullRequestInput = {
   policy: {
     source: {
       type: "trusted_base_branch" as const,
-      revision: "1111111111111111111111111111111111111111",
+      revision: reviewedPullRequest.baseSha,
       path: ".diffowl.json",
     },
-    contents: JSON.stringify({
-      version: 1,
-      scope: {
-        includePaths: ["src/**"],
-        excludePaths: ["dist/**"],
-      },
-      limits: {
-        reviewTimeoutSeconds: 600,
-        maxFindings: 25,
-      },
-    }),
+    contents: JSON.stringify(effectivePolicy),
   },
 };
 
@@ -46,26 +49,11 @@ describe("runReview", () => {
 
     expect(outcome).toEqual({
       type: "partial_coverage",
-      pullRequest: {
-        repository: "example/review-target",
-        number: 42,
-        baseSha: "1111111111111111111111111111111111111111",
-        headSha: "2222222222222222222222222222222222222222",
-      },
+      pullRequest: reviewedPullRequest,
       reason: "The tracer path does not analyze changes yet.",
       policy: {
         source: representativePullRequest.policy.source,
-        effective: {
-          version: 1,
-          scope: {
-            includePaths: ["src/**"],
-            excludePaths: ["dist/**"],
-          },
-          limits: {
-            reviewTimeoutSeconds: 600,
-            maxFindings: 25,
-          },
-        },
+        effective: effectivePolicy,
       },
     });
   });
@@ -86,8 +74,7 @@ describe("runReview", () => {
     expect(outcome).toMatchObject({
       type: "configuration_failure",
       policySource: representativePullRequest.policy.source,
-      reason:
-        "Project policy limits.reviewTimeoutSeconds exceeds the security ceiling of 3600.",
+      reason: "Project policy limits.reviewTimeoutSeconds exceeds the security ceiling of 3600.",
     });
   });
 
@@ -102,12 +89,7 @@ describe("runReview", () => {
 
     expect(outcome).toEqual({
       type: "configuration_failure",
-      pullRequest: {
-        repository: "example/review-target",
-        number: 42,
-        baseSha: "1111111111111111111111111111111111111111",
-        headSha: "2222222222222222222222222222222222222222",
-      },
+      pullRequest: reviewedPullRequest,
       policySource: representativePullRequest.policy.source,
       reason: "Project policy is not valid JSON.",
     });

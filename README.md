@@ -83,7 +83,11 @@ Policy fields are closed: unsupported active fields fail configuration instead o
 ## Development
 
 ```bash
-npm test
+npm run format
+npm run lint
 npm run typecheck
+npm test
 npm run build
 ```
+
+Run the complete CI check locally with `npm run check`. Oxlint enforces correctness, suspicious-code, performance, and cyclomatic-complexity rules. Each function is limited to a cyclomatic complexity of 10 and 60 non-blank, non-comment lines. Each file is limited to 300 non-blank, non-comment lines. Oxfmt provides deterministic formatting, and `npm run format:check` verifies it without changing files.

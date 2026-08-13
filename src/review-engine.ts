@@ -73,9 +73,7 @@ function pullRequestFrom(input: PullRequestInput): ReviewedPullRequest {
   };
 }
 
-type PolicyParseResult =
-  | { valid: true; policy: ProjectPolicy }
-  | { valid: false; reason: string };
+type PolicyParseResult = { valid: true; policy: ProjectPolicy } | { valid: false; reason: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -93,14 +91,64 @@ function unsupportedField(
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) &&
-    value.every((item) => typeof item === "string" && item.length > 0)
-  );
+  return Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0);
 }
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function validateScope(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return "Project policy scope must be an object.";
+  }
+  const fieldError = unsupportedField(value, ["includePaths", "excludePaths"], "scope");
+  if (fieldError !== undefined) {
+    return fieldError;
+  }
+  if (!isStringArray(value.includePaths) || !isStringArray(value.excludePaths)) {
+    return "Project policy scope paths must be arrays of non-empty strings.";
+  }
+  return undefined;
+}
+
+function validateLimit(
+  value: unknown,
+  name: keyof typeof PROJECT_POLICY_CEILINGS,
+): string | undefined {
+  if (!isPositiveInteger(value)) {
+    return `Project policy limits.${name} must be a positive integer.`;
+  }
+  const ceiling = PROJECT_POLICY_CEILINGS[name];
+  return value > ceiling
+    ? `Project policy limits.${name} exceeds the security ceiling of ${ceiling}.`
+    : undefined;
+}
+
+function validateLimits(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return "Project policy limits must be an object.";
+  }
+  const fieldError = unsupportedField(value, ["reviewTimeoutSeconds", "maxFindings"], "limits");
+  return (
+    fieldError ??
+    validateLimit(value.reviewTimeoutSeconds, "reviewTimeoutSeconds") ??
+    validateLimit(value.maxFindings, "maxFindings")
+  );
+}
+
+function validatePolicy(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return "Project policy must be a JSON object.";
+  }
+  const fieldError = unsupportedField(value, ["version", "scope", "limits"], "root");
+  if (fieldError !== undefined) {
+    return fieldError;
+  }
+  if (value.version !== 1) {
+    return "Project policy version must be 1.";
+  }
+  return validateScope(value.scope) ?? validateLimits(value.limits);
 }
 
 function parseProjectPolicy(contents: string | undefined): PolicyParseResult {
@@ -115,97 +163,15 @@ function parseProjectPolicy(contents: string | undefined): PolicyParseResult {
     return { valid: false, reason: "Project policy is not valid JSON." };
   }
 
-  if (!isRecord(value)) {
-    return { valid: false, reason: "Project policy must be a JSON object." };
+  const reason = validatePolicy(value);
+  if (reason !== undefined) {
+    return { valid: false, reason };
   }
 
-  const rootFieldError = unsupportedField(
-    value,
-    ["version", "scope", "limits"],
-    "root",
-  );
-  if (rootFieldError !== undefined) {
-    return { valid: false, reason: rootFieldError };
-  }
-  if (value.version !== 1) {
-    return { valid: false, reason: "Project policy version must be 1." };
-  }
-  if (!isRecord(value.scope)) {
-    return { valid: false, reason: "Project policy scope must be an object." };
-  }
-  const scopeFieldError = unsupportedField(
-    value.scope,
-    ["includePaths", "excludePaths"],
-    "scope",
-  );
-  if (scopeFieldError !== undefined) {
-    return { valid: false, reason: scopeFieldError };
-  }
-  if (
-    !isStringArray(value.scope.includePaths) ||
-    !isStringArray(value.scope.excludePaths)
-  ) {
-    return {
-      valid: false,
-      reason:
-        "Project policy scope paths must be arrays of non-empty strings.",
-    };
-  }
-  if (!isRecord(value.limits)) {
-    return { valid: false, reason: "Project policy limits must be an object." };
-  }
-  const limitsFieldError = unsupportedField(
-    value.limits,
-    ["reviewTimeoutSeconds", "maxFindings"],
-    "limits",
-  );
-  if (limitsFieldError !== undefined) {
-    return { valid: false, reason: limitsFieldError };
-  }
-
-  const { maxFindings, reviewTimeoutSeconds } = value.limits;
-  if (!isPositiveInteger(reviewTimeoutSeconds)) {
-    return {
-      valid: false,
-      reason:
-        "Project policy limits.reviewTimeoutSeconds must be a positive integer.",
-    };
-  }
-  if (reviewTimeoutSeconds > PROJECT_POLICY_CEILINGS.reviewTimeoutSeconds) {
-    return {
-      valid: false,
-      reason: `Project policy limits.reviewTimeoutSeconds exceeds the security ceiling of ${PROJECT_POLICY_CEILINGS.reviewTimeoutSeconds}.`,
-    };
-  }
-  if (!isPositiveInteger(maxFindings)) {
-    return {
-      valid: false,
-      reason: "Project policy limits.maxFindings must be a positive integer.",
-    };
-  }
-  if (maxFindings > PROJECT_POLICY_CEILINGS.maxFindings) {
-    return {
-      valid: false,
-      reason: `Project policy limits.maxFindings exceeds the security ceiling of ${PROJECT_POLICY_CEILINGS.maxFindings}.`,
-    };
-  }
-
-  return {
-    valid: true,
-    policy: {
-      version: 1,
-      scope: {
-        includePaths: value.scope.includePaths,
-        excludePaths: value.scope.excludePaths,
-      },
-      limits: { reviewTimeoutSeconds, maxFindings },
-    },
-  };
+  return { valid: true, policy: value as ProjectPolicy };
 }
 
-export async function runReview(
-  input: PullRequestInput,
-): Promise<ReviewOutcome> {
+export async function runReview(input: PullRequestInput): Promise<ReviewOutcome> {
   const result = parseProjectPolicy(input.policy.contents);
   if (!result.valid) {
     return {

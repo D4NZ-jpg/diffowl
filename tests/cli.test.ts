@@ -5,30 +5,23 @@ import { describe, expect, it } from "vitest";
 
 import { runCli } from "../src/cli.js";
 
-const fixturePath = fileURLToPath(
-  new URL("./fixtures/pull-request.json", import.meta.url),
-);
-const policyPath = fileURLToPath(
-  new URL("./fixtures/project-policy.json", import.meta.url),
-);
+const fixturePath = fileURLToPath(new URL("./fixtures/pull-request.json", import.meta.url));
+const policyPath = fileURLToPath(new URL("./fixtures/project-policy.json", import.meta.url));
 
 describe("diffowl review", () => {
   it("runs the Review engine for pull-request input", async () => {
     let stdout = "";
     let stderr = "";
 
-    const exitCode = await runCli(
-      ["review", "--input", fixturePath, "--policy", policyPath],
-      {
-        readFile,
-        stdout: (text) => {
-          stdout += text;
-        },
-        stderr: (text) => {
-          stderr += text;
-        },
+    const exitCode = await runCli(["review", "--input", fixturePath, "--policy", policyPath], {
+      readFile,
+      stdout: (text) => {
+        stdout += text;
       },
-    );
+      stderr: (text) => {
+        stderr += text;
+      },
+    });
 
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
