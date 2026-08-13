@@ -3,6 +3,10 @@ export const PROJECT_POLICY_PATH = ".diffowl.json";
 export const PROJECT_POLICY_CEILINGS = {
   reviewTimeoutSeconds: 3_600,
   maxFindings: 100,
+  validationCommandCount: 10,
+  validationCommandTimeoutSeconds: 600,
+  validationOutputBytes: 64 * 1024,
+  repositoryEvidenceBytes: 64 * 1024,
 } as const;
 
 export type PolicySource =
@@ -31,6 +35,11 @@ export interface RoleProfile {
 
 export type RoleProfiles = Record<ReviewRole, RoleProfile>;
 
+export interface ValidationCommand {
+  argv: [string, ...string[]];
+  timeoutSeconds: number;
+}
+
 export interface ProjectPolicy {
   version: 1;
   scope: {
@@ -40,6 +49,9 @@ export interface ProjectPolicy {
   limits: {
     reviewTimeoutSeconds: number;
     maxFindings: number;
+  };
+  verification: {
+    validationCommands: ValidationCommand[];
   };
   roleProfiles: RoleProfiles;
 }
@@ -102,6 +114,50 @@ function validateLimits(value: unknown): string | undefined {
   );
 }
 
+function validateValidationCommand(value: unknown, index: number): string | undefined {
+  if (!isRecord(value)) {
+    return `Project policy verification.validationCommands[${index}] must be an object.`;
+  }
+  const location = `verification.validationCommands[${index}]`;
+  const fieldError = unsupportedField(value, ["argv", "timeoutSeconds"], location);
+  if (fieldError !== undefined) return fieldError;
+  if (!isStringArray(value.argv)) {
+    return `Project policy ${location}.argv must be a non-empty string array.`;
+  }
+  if (!isPositiveInteger(value.timeoutSeconds)) {
+    return `Project policy ${location}.timeoutSeconds must be a positive integer.`;
+  }
+  return value.timeoutSeconds > PROJECT_POLICY_CEILINGS.validationCommandTimeoutSeconds
+    ? `Project policy ${location}.timeoutSeconds exceeds the security ceiling of ${PROJECT_POLICY_CEILINGS.validationCommandTimeoutSeconds}.`
+    : undefined;
+}
+
+function validateVerification(value: unknown, reviewTimeoutSeconds: unknown): string | undefined {
+  if (!isRecord(value)) return "Project policy verification must be an object.";
+  const fieldError = unsupportedField(value, ["validationCommands"], "verification");
+  if (fieldError !== undefined) return fieldError;
+  if (!Array.isArray(value.validationCommands)) {
+    return "Project policy verification.validationCommands must be an array.";
+  }
+  if (value.validationCommands.length > PROJECT_POLICY_CEILINGS.validationCommandCount) {
+    return `Project policy verification.validationCommands exceeds the security ceiling of ${PROJECT_POLICY_CEILINGS.validationCommandCount}.`;
+  }
+  const commandError = value.validationCommands
+    .map((command, index) => validateValidationCommand(command, index))
+    .find(Boolean);
+  if (commandError !== undefined) return commandError;
+  if (!isPositiveInteger(reviewTimeoutSeconds)) return undefined;
+  const tooLongIndex = value.validationCommands.findIndex(
+    (command) =>
+      isRecord(command) &&
+      typeof command.timeoutSeconds === "number" &&
+      command.timeoutSeconds > reviewTimeoutSeconds,
+  );
+  return tooLongIndex === -1
+    ? undefined
+    : `Project policy verification.validationCommands[${tooLongIndex}].timeoutSeconds exceeds limits.reviewTimeoutSeconds of ${reviewTimeoutSeconds}.`;
+}
+
 function validateRoleProfile(value: unknown, role: ReviewRole): string | undefined {
   if (!isRecord(value)) return `Project policy roleProfiles.${role} must be an object.`;
   const fields = ["provider", "model", "credentialProfile"];
@@ -132,7 +188,7 @@ function validatePolicy(value: unknown): string | undefined {
   if (!isRecord(value)) return "Project policy must be a JSON object.";
   const fieldError = unsupportedField(
     value,
-    ["version", "scope", "limits", "roleProfiles"],
+    ["version", "scope", "limits", "verification", "roleProfiles"],
     "root",
   );
   if (fieldError !== undefined) return fieldError;
@@ -140,6 +196,10 @@ function validatePolicy(value: unknown): string | undefined {
   return (
     validateScope(value.scope) ??
     validateLimits(value.limits) ??
+    validateVerification(
+      value.verification,
+      isRecord(value.limits) ? value.limits.reviewTimeoutSeconds : undefined,
+    ) ??
     validateRoleProfiles(value.roleProfiles)
   );
 }

@@ -70,9 +70,10 @@ const roleOutputs = [
     assessments: [
       {
         candidateIndex: 0,
-        state: "strengthened",
+        disposition: "material",
         explanation: "The diff demonstrates the changed value.",
-        evidence: ["pull-request.diff"],
+        evidenceIds: ["scoped-diff"],
+        limitations: [],
       },
     ],
   },
@@ -134,7 +135,7 @@ describe("createRunCellRoleExecutor", () => {
       },
       {
         type: "completed",
-        output: { role: "verifier", assessments: [{ state: "strengthened" }] },
+        output: { role: "verifier", assessments: [{ disposition: "material" }] },
         artifact: { role: "verifier", snapshot: { files: [{ path: "verifier.txt" }] } },
       },
     ]);

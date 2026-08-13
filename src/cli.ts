@@ -3,11 +3,13 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
+import { createHostVerificationAdapter } from "./host-verification.js";
 import {
   type DiffowlCredentials,
   type PullRequestInput,
   type RoleExecutionRequest,
   type RoleExecutionResult,
+  type VerificationAdapter,
   runReview,
 } from "./review-engine.js";
 import { classifyTrust } from "./trust.js";
@@ -18,6 +20,7 @@ export interface CliIo {
   stderr(text: string): void;
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>>;
   executeRole?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
+  verificationAdapter?: VerificationAdapter;
 }
 
 const processIo: CliIo = {
@@ -90,6 +93,7 @@ export async function runCli(args: readonly string[], io: CliIo = processIo): Pr
       {
         credentialProfiles: io.credentialProfiles ?? { default: "local" },
         executeRole: io.executeRole,
+        verificationAdapter: io.verificationAdapter ?? createHostVerificationAdapter(),
       },
     );
     io.stdout(`${JSON.stringify(outcome)}\n`);

@@ -63,6 +63,11 @@ describe("diffowl review", () => {
         emptyArtifact("challenger"),
         emptyArtifact("verifier"),
       ],
+      verification: {
+        evidenceCatalog: [],
+        validationAttempts: [],
+        limitations: ["The configured review scope produced an empty diff."],
+      },
       trust: {
         class: "local_cli",
         capabilities: {
@@ -88,6 +93,7 @@ describe("diffowl review", () => {
             reviewTimeoutSeconds: 600,
             maxFindings: 25,
           },
+          verification: { validationCommands: [] },
           roleProfiles: {
             reviewer: {
               provider: "openai",

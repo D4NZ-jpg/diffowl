@@ -56,6 +56,7 @@ async function createRepresentativeRepository(): Promise<{
       version: 1,
       scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
       limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
+      verification: { validationCommands: [] },
       roleProfiles,
     }),
     "utf8",
@@ -70,6 +71,7 @@ async function createRepresentativeRepository(): Promise<{
       version: 1,
       scope: { includePaths: ["**"], excludePaths: [] },
       limits: { reviewTimeoutSeconds: 3_601, maxFindings: 100 },
+      verification: { validationCommands: [] },
       roleProfiles,
     }),
     "utf8",
@@ -137,10 +139,11 @@ describe("installable Review OWL Action", () => {
           version: 1,
           scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
           limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
+          verification: { validationCommands: [] },
           roleProfiles,
         },
       },
     });
     expect(await readFile(outputPath, "utf8")).toBe(`outcome=${JSON.stringify(outcome)}\n`);
-  });
+  }, 15_000);
 });

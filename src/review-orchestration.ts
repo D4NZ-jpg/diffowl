@@ -1,7 +1,13 @@
 /* oxlint-disable max-lines */
 import { minimatch } from "minimatch";
 
-import type { ProjectPolicy, ReviewRole, RoleProfile } from "./project-policy.js";
+import {
+  PROJECT_POLICY_CEILINGS,
+  type ProjectPolicy,
+  type ReviewRole,
+  type RoleProfile,
+} from "./project-policy.js";
+import { truncateUtf8 } from "./utf8.js";
 
 export type DiffowlStoredCredential =
   | { type: "api_key"; key?: string; env?: Record<string, string> }
@@ -50,11 +56,29 @@ export interface CandidateDraft {
   evidence: string[];
 }
 
+export type VerificationEvidence =
+  | { id: string; type: "scoped_diff"; path: string; content: string; truncated: boolean }
+  | { id: string; type: "repository_file"; path: string; content: string; truncated: boolean }
+  | { id: string; type: "validation"; commandIndex: number; content: string; truncated: boolean };
+
+export interface ValidationAttempt {
+  commandIndex: number;
+  argv: string[];
+  timeoutSeconds: number;
+  status: "passed" | "failed" | "timed_out" | "aborted" | "error";
+  exitCode?: number | undefined;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  limitation?: string | undefined;
+}
+
 export interface CandidateFinding extends CandidateDraft {
+  evidence: string[];
   verification: {
-    state: "strengthened" | "limited";
     explanation: string;
-    evidence: string[];
+    usedEvidence: VerificationEvidence[];
+    limitations: string[];
   };
 }
 
@@ -107,9 +131,10 @@ export interface ChallengerAssessment {
 
 export interface VerifierAssessment {
   candidateIndex: number;
-  state: "strengthened" | "limited" | "rejected";
+  disposition: "material" | "advisory" | "suppress";
+  evidenceIds: string[];
   explanation: string;
-  evidence: string[];
+  limitations: string[];
 }
 
 export type RoleOutput =
@@ -120,6 +145,36 @@ export type RoleOutput =
     }
   | { role: "challenger"; assessments: ChallengerAssessment[] }
   | { role: "verifier"; assessments: VerifierAssessment[] };
+
+export interface VerificationContext {
+  evidenceCatalog: VerificationEvidence[];
+  validationAttempts: ValidationAttempt[];
+  limitations: string[];
+}
+
+export interface RepositoryEvidenceRequest {
+  repository: string;
+  headSha: string;
+  path: string;
+  maxBytes: number;
+  signal: AbortSignal;
+}
+
+export interface ValidationExecutionRequest {
+  argv: string[];
+  timeoutSeconds: number;
+  maxOutputBytes: number;
+  signal: AbortSignal;
+}
+
+export interface VerificationAdapter {
+  readRepositoryFile(
+    request: RepositoryEvidenceRequest,
+  ): Promise<{ content: string; truncated: boolean } | undefined>;
+  executeValidation(
+    request: ValidationExecutionRequest,
+  ): Promise<Omit<ValidationAttempt, "commandIndex" | "argv" | "timeoutSeconds">>;
+}
 
 export interface RoleExecutionRequest {
   pullRequest: ReviewedPullRequest;
@@ -150,6 +205,7 @@ export type OrchestrationExecutionResult =
       type: "completed";
       candidateFindings: CandidateFinding[];
       advisorySuggestions: AdvisorySuggestion[];
+      verification: VerificationContext;
       executionArtifacts: RoleExecutionArtifact[];
     }
   | {
@@ -219,19 +275,22 @@ function diffPath(section: string): string | undefined {
   return header?.[1] === undefined ? undefined : decodeGitPath(header[1]);
 }
 
+function pathInScope(path: string, policy: ProjectPolicy): boolean {
+  const included = policy.scope.includePaths.some((pattern) =>
+    minimatch(path, pattern, { dot: true }),
+  );
+  const excluded = policy.scope.excludePaths.some((pattern) =>
+    minimatch(path, pattern, { dot: true }),
+  );
+  return included && !excluded;
+}
+
 function scopedDiff(diff: string, policy: ProjectPolicy): string {
   return diff
     .split(/(?=^diff --git )/m)
     .filter((section) => {
       const path = diffPath(section);
-      if (path === undefined) return false;
-      const included = policy.scope.includePaths.some((pattern) =>
-        minimatch(path, pattern, { dot: true }),
-      );
-      const excluded = policy.scope.excludePaths.some((pattern) =>
-        minimatch(path, pattern, { dot: true }),
-      );
-      return included && !excluded;
+      return path !== undefined && pathInScope(path, policy);
     })
     .join("");
 }
@@ -260,33 +319,276 @@ function challengedCandidates(
   return { candidates: surviving, advisories: updatedAdvisories };
 }
 
-function verifiedCandidates(
-  candidates: CandidateDraft[],
-  assessments: VerifierAssessment[],
-): CandidateFinding[] {
-  const byIndex = new Map(assessments.map((assessment) => [assessment.candidateIndex, assessment]));
-  return candidates.flatMap((candidate, index) => {
-    const assessment = byIndex.get(index);
-    if (assessment?.state === "rejected") return [];
-    return [
-      {
-        ...candidate,
-        verification: assessment
-          ? {
-              state: assessment.state,
-              explanation: assessment.explanation,
-              evidence: assessment.evidence,
-            }
-          : {
-              state: "limited",
-              explanation: "The verifier returned no assessment for this candidate.",
-              evidence: [],
-            },
-      },
-    ];
-  });
+function validVerifierAssessment(
+  value: VerifierAssessment | undefined,
+): value is VerifierAssessment {
+  if (value === undefined || !Number.isInteger(value.candidateIndex)) return false;
+  if (
+    !Array.isArray(value.evidenceIds) ||
+    !value.evidenceIds.every((id) => typeof id === "string")
+  ) {
+    return false;
+  }
+  if (typeof value.explanation !== "string" || value.explanation.length === 0) return false;
+  if (!Array.isArray(value.limitations)) return false;
+  return value.limitations.every(
+    (limitation) => typeof limitation === "string" && limitation.length > 0,
+  );
 }
 
+function verifiedCandidates(
+  candidates: CandidateDraft[],
+  advisories: AdvisorySuggestion[],
+  assessments: VerifierAssessment[],
+  context: VerificationContext,
+): { findings: CandidateFinding[]; advisories: AdvisorySuggestion[] } {
+  const catalog = new Map(context.evidenceCatalog.map((evidence) => [evidence.id, evidence]));
+  const byIndex = new Map(assessments.map((assessment) => [assessment.candidateIndex, assessment]));
+  const findings: CandidateFinding[] = [];
+  const updatedAdvisories = [...advisories];
+  candidates.forEach((candidate, index) => {
+    const assessment = byIndex.get(index);
+    if (!validVerifierAssessment(assessment)) return;
+    if (assessment.disposition === "advisory") {
+      updatedAdvisories.push({
+        summary: candidate.summary,
+        rationale: assessment.explanation,
+        location: candidate.location,
+      });
+      return;
+    }
+    if (assessment.disposition !== "material") return;
+    const usedEvidence = assessment.evidenceIds.flatMap((id) => {
+      const evidence = catalog.get(id);
+      return evidence === undefined ? [] : [evidence];
+    });
+    if (usedEvidence.length === 0) return;
+    findings.push({
+      ...candidate,
+      evidence: usedEvidence.map(({ id }) => id),
+      verification: {
+        explanation: assessment.explanation,
+        usedEvidence,
+        limitations: [...context.limitations, ...assessment.limitations],
+      },
+    });
+  });
+  return { findings, advisories: updatedAdvisories };
+}
+
+async function repositoryEvidence(
+  pullRequest: ReviewedPullRequest,
+  candidates: CandidateDraft[],
+  policy: ProjectPolicy,
+  adapter: VerificationAdapter,
+  signal: AbortSignal,
+): Promise<{ evidence: VerificationEvidence[]; limitations: string[] }> {
+  const evidence: VerificationEvidence[] = [];
+  const limitations: string[] = [];
+  const paths = [...new Set(candidates.map(({ location }) => location.path))];
+  let evidenceIndex = 0;
+  for (const path of paths) {
+    if (!pathInScope(path, policy)) {
+      limitations.push(`Repository evidence was not read for out-of-scope path ${path}.`);
+      continue;
+    }
+    try {
+      // Repository reads are sequential to keep adapter resource use bounded.
+      // oxlint-disable-next-line no-await-in-loop
+      const result = await adapter.readRepositoryFile({
+        repository: pullRequest.repository,
+        headSha: pullRequest.headSha,
+        path,
+        maxBytes: PROJECT_POLICY_CEILINGS.repositoryEvidenceBytes,
+        signal,
+      });
+      if (result === undefined) {
+        limitations.push(
+          `Repository evidence was unavailable for ${path} at ${pullRequest.headSha}.`,
+        );
+        continue;
+      }
+      const bounded = truncateUtf8(result.content, PROJECT_POLICY_CEILINGS.repositoryEvidenceBytes);
+      if (bounded.content.length === 0) {
+        limitations.push(`Repository evidence for ${path} was empty.`);
+        continue;
+      }
+      evidence.push({
+        id: `repository-file:${evidenceIndex}`,
+        type: "repository_file",
+        path,
+        content: bounded.content,
+        truncated: result.truncated || bounded.truncated,
+      });
+      evidenceIndex += 1;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      limitations.push(`Repository evidence failed for ${path}: ${reason}`);
+    }
+  }
+  return { evidence, limitations };
+}
+
+async function executeValidationCommand(
+  commandIndex: number,
+  command: ProjectPolicy["verification"]["validationCommands"][number],
+  adapter: VerificationAdapter,
+  signal: AbortSignal,
+): Promise<ValidationAttempt> {
+  let result: Omit<ValidationAttempt, "commandIndex" | "argv" | "timeoutSeconds">;
+  try {
+    result = await adapter.executeValidation({
+      argv: command.argv,
+      timeoutSeconds: command.timeoutSeconds,
+      maxOutputBytes: PROJECT_POLICY_CEILINGS.validationOutputBytes,
+      signal,
+    });
+  } catch (error) {
+    result = {
+      status: signal.aborted ? "aborted" : "error",
+      stdout: "",
+      stderr: "",
+      truncated: false,
+      limitation: error instanceof Error ? error.message : String(error),
+    };
+  }
+  const stdout = truncateUtf8(result.stdout, PROJECT_POLICY_CEILINGS.validationOutputBytes);
+  const separatorBytes = stdout.content.length > 0 && result.stderr.length > 0 ? 1 : 0;
+  const remaining = Math.max(
+    0,
+    PROJECT_POLICY_CEILINGS.validationOutputBytes -
+      Buffer.byteLength(stdout.content) -
+      separatorBytes,
+  );
+  const stderr = truncateUtf8(result.stderr, remaining);
+  return {
+    ...result,
+    commandIndex,
+    argv: [...command.argv],
+    timeoutSeconds: command.timeoutSeconds,
+    stdout: stdout.content,
+    stderr: stderr.content,
+    truncated: result.truncated || stdout.truncated || stderr.truncated,
+  };
+}
+
+async function validationEvidence(
+  policy: ProjectPolicy,
+  adapter: VerificationAdapter,
+  allowed: boolean,
+  signal: AbortSignal,
+): Promise<{
+  evidence: VerificationEvidence[];
+  attempts: ValidationAttempt[];
+  limitations: string[];
+}> {
+  const commands = policy.verification.validationCommands;
+  if (!allowed) {
+    return {
+      evidence: [],
+      attempts: [],
+      limitations:
+        commands.length === 0
+          ? []
+          : ["Configured validation commands were denied by the trust class."],
+    };
+  }
+  // Commands are selected by trusted policy. Parallel execution keeps the full-review timeout effective.
+  const attempts = await Promise.all(
+    commands.map((command, index) => executeValidationCommand(index, command, adapter, signal)),
+  );
+  const evidence: VerificationEvidence[] = attempts.flatMap((attempt) => {
+    const content = [attempt.stdout, attempt.stderr].filter(Boolean).join("\n");
+    const evidentiaryStatus = ["passed", "failed", "timed_out"].includes(attempt.status);
+    return evidentiaryStatus && content.length > 0
+      ? [
+          {
+            id: `validation:${attempt.commandIndex}`,
+            type: "validation" as const,
+            commandIndex: attempt.commandIndex,
+            content,
+            truncated: attempt.truncated,
+          },
+        ]
+      : [];
+  });
+  const limitations = attempts.flatMap((attempt) =>
+    attempt.status === "passed"
+      ? []
+      : [
+          attempt.limitation ??
+            `Validation command ${attempt.commandIndex} completed with ${attempt.status}.`,
+        ],
+  );
+  return { evidence, attempts, limitations };
+}
+
+async function gatherVerificationContext(
+  pullRequest: ReviewedPullRequest,
+  diff: string,
+  candidates: CandidateDraft[],
+  policy: ProjectPolicy,
+  adapter: VerificationAdapter,
+  validationCommandsAllowed: boolean,
+  signal: AbortSignal,
+): Promise<VerificationContext> {
+  const boundedDiff = truncateUtf8(
+    scopedDiff(diff, policy),
+    PROJECT_POLICY_CEILINGS.repositoryEvidenceBytes,
+  );
+  const repository = await repositoryEvidence(pullRequest, candidates, policy, adapter, signal);
+  const validation = await validationEvidence(policy, adapter, validationCommandsAllowed, signal);
+  const diffEvidence: VerificationEvidence[] =
+    boundedDiff.content.length === 0
+      ? []
+      : [
+          {
+            id: "scoped-diff",
+            type: "scoped_diff",
+            path: "pull-request.diff",
+            content: boundedDiff.content,
+            truncated: boundedDiff.truncated,
+          },
+        ];
+  return {
+    evidenceCatalog: [...diffEvidence, ...repository.evidence, ...validation.evidence],
+    validationAttempts: validation.attempts,
+    limitations: [
+      ...(boundedDiff.content.length === 0
+        ? ["The configured review scope produced an empty diff."]
+        : []),
+      ...repository.limitations,
+      ...validation.limitations,
+    ],
+  };
+}
+
+interface OrchestrationState {
+  candidates: CandidateDraft[];
+  advisories: AdvisorySuggestion[];
+  roleInput: unknown;
+  assessments: VerifierAssessment[];
+}
+
+function applyRoleOutput(state: OrchestrationState, output: RoleOutput): void {
+  if (output.role === "reviewer") {
+    state.candidates = output.candidateFindings;
+    state.advisories = output.advisorySuggestions;
+    state.roleInput = output;
+    return;
+  }
+  if (output.role === "challenger") {
+    const challenged = challengedCandidates(state.candidates, state.advisories, output.assessments);
+    state.candidates = challenged.candidates;
+    state.advisories = challenged.advisories;
+    state.roleInput = { candidateFindings: state.candidates };
+    return;
+  }
+  state.assessments = output.assessments;
+}
+
+// Roles are deliberately sequential because each consumes the prior role's output.
+// oxlint-disable-next-line max-lines-per-function, no-await-in-loop
 export async function orchestrateReviewRoles(
   pullRequest: ReviewedPullRequest,
   diff: string,
@@ -294,16 +596,37 @@ export async function orchestrateReviewRoles(
   roles: ResolvedRoles,
   executeRole: RoleExecutor,
   signal: AbortSignal,
+  verificationAdapter: VerificationAdapter,
+  validationCommandsAllowed: boolean,
   artifacts: RoleExecutionArtifact[] = [],
 ): Promise<OrchestrationExecutionResult> {
   const plan = orchestrationPlan(policy);
-  let candidates: CandidateDraft[] = [];
-  let advisories: AdvisorySuggestion[] = [];
-  let roleInput: unknown = { task: "generate candidates" };
-  let verification: VerifierAssessment[] = [];
+  const state: OrchestrationState = {
+    candidates: [],
+    advisories: [],
+    roleInput: { task: "generate candidates" },
+    assessments: [],
+  };
+  let verification: VerificationContext = {
+    evidenceCatalog: [],
+    validationAttempts: [],
+    limitations: [],
+  };
   for (const step of plan.steps) {
     const configuredRole = roles[step.role];
-    // Roles are deliberately sequential because each consumes the prior role's output.
+    if (step.role === "verifier") {
+      // oxlint-disable-next-line no-await-in-loop
+      verification = await gatherVerificationContext(
+        pullRequest,
+        diff,
+        state.candidates,
+        policy,
+        verificationAdapter,
+        validationCommandsAllowed,
+        signal,
+      );
+      state.roleInput = { candidateFindings: state.candidates, ...verification };
+    }
     // oxlint-disable-next-line no-await-in-loop
     const result = await executeRole({
       pullRequest,
@@ -311,7 +634,7 @@ export async function orchestrateReviewRoles(
       step,
       profile: configuredRole.profile,
       credentials: configuredRole.credentials,
-      roleInput,
+      roleInput: state.roleInput,
       maxCandidateFindings: plan.maxCandidateFindings,
       signal,
     });
@@ -327,23 +650,19 @@ export async function orchestrateReviewRoles(
         executionArtifacts: artifacts,
       };
     }
-    if (result.output.role === "reviewer") {
-      candidates = result.output.candidateFindings;
-      advisories = result.output.advisorySuggestions;
-      roleInput = result.output;
-    } else if (result.output.role === "challenger") {
-      const challenged = challengedCandidates(candidates, advisories, result.output.assessments);
-      candidates = challenged.candidates;
-      advisories = challenged.advisories;
-      roleInput = { candidateFindings: candidates };
-    } else {
-      verification = result.output.assessments;
-    }
+    applyRoleOutput(state, result.output);
   }
+  const verified = verifiedCandidates(
+    state.candidates,
+    state.advisories,
+    state.assessments,
+    verification,
+  );
   return {
     type: "completed",
-    candidateFindings: verifiedCandidates(candidates, verification),
-    advisorySuggestions: advisories,
+    candidateFindings: verified.findings,
+    advisorySuggestions: verified.advisories,
+    verification,
     executionArtifacts: artifacts,
   };
 }

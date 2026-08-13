@@ -12,6 +12,7 @@ import {
   type ReviewedPullRequest,
   type RoleExecutionArtifact,
   type RoleExecutor,
+  type VerificationAdapter,
   orchestrateReviewRoles,
   orchestrationPlan,
 } from "./review-orchestration.js";
@@ -47,6 +48,11 @@ export type {
   RoleExecutionRequest,
   RoleExecutionResult,
   RoleOutput,
+  ValidationAttempt,
+  ValidationExecutionRequest,
+  VerificationAdapter,
+  VerificationContext,
+  VerificationEvidence,
   VerifierAssessment,
 } from "./review-orchestration.js";
 export type {
@@ -78,6 +84,7 @@ export type ReviewOutcome =
       type: "candidates_generated";
       candidateFindings: import("./review-orchestration.js").CandidateFinding[];
       advisorySuggestions: import("./review-orchestration.js").AdvisorySuggestion[];
+      verification: import("./review-orchestration.js").VerificationContext;
       orchestrationPlan: import("./review-orchestration.js").OrchestrationPlan;
       executionArtifacts: RoleExecutionArtifact[];
     })
@@ -101,10 +108,21 @@ export type ReviewOutcome =
 export interface ReviewDependencies {
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>> | undefined;
   executeRole?: RoleExecutor | undefined;
+  verificationAdapter?: VerificationAdapter | undefined;
 }
 
 const defaultCredentialProfiles = { default: { type: "env" as const } };
 const defaultExecuteRole = createRunCellRoleExecutor();
+export const unavailableVerificationAdapter: VerificationAdapter = {
+  readRepositoryFile: async () => undefined,
+  executeValidation: async () => ({
+    status: "error",
+    stdout: "",
+    stderr: "",
+    truncated: false,
+    limitation: "No validation execution adapter was configured.",
+  }),
+};
 
 function pullRequestFrom(input: PullRequestInput): ReviewedPullRequest {
   return {
@@ -183,6 +201,8 @@ async function executeWithinTimeout(
   }
 }
 
+// The public seam keeps policy, trust, timeout, and orchestration ordering visible.
+// oxlint-disable-next-line max-lines-per-function
 export async function runReview(
   input: PullRequestInput,
   dependencies: ReviewDependencies = {},
@@ -220,6 +240,8 @@ export async function runReview(
         roles,
         dependencies.executeRole ?? defaultExecuteRole,
         controller.signal,
+        dependencies.verificationAdapter ?? unavailableVerificationAdapter,
+        input.trust.capabilities.validationCommands !== "denied",
         executionArtifacts,
       ),
     result.policy.limits.reviewTimeoutSeconds,
@@ -239,6 +261,7 @@ export async function runReview(
     type: "candidates_generated",
     candidateFindings: execution.candidateFindings,
     advisorySuggestions: execution.advisorySuggestions,
+    verification: execution.verification,
     orchestrationPlan: orchestrationPlan(result.policy),
     executionArtifacts: execution.executionArtifacts,
   };

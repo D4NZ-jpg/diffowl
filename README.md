@@ -37,7 +37,7 @@ The Action's `default` credential profile uses RunCell's `env` credential mode. 
 
 The Action reads `.diffowl.json` from the pull request's base commit. It never reads policy from the pull-request head or synthetic merge commit, so a pull request cannot weaken its own review policy. The `outcome` output contains the typed Review outcome as JSON, including its Trust class and effective capabilities.
 
-Same-repository pull requests may use only the trusted credential profiles referenced by base-branch role profiles. The repository policy names profiles but does not contain secrets or grant secret-store access. The Action maps `default` to RunCell environment credentials by default. They are also eligible for configured validation commands only in a sandbox and within the policy timeout. Fork and Dependabot pull requests are untrusted: validation commands, secrets, write tokens, privileged tools, and publishing are denied. They receive a `partial_coverage` outcome while the tracer can perform only static review. Unsupported or unsafe event contexts receive a `policy_skip`; invalid, missing, over-budget, or security-weakening policy receives a `configuration_failure`. None of these cases can appear clean.
+Same-repository pull requests may use only the trusted credential profiles referenced by base-branch role profiles. The repository policy names profiles but does not contain secrets or grant secret-store access. The Action maps `default` to RunCell environment credentials by default. They are also eligible for configured validation commands only within the externally isolated GitHub job and the policy timeout. Fork and Dependabot pull requests are untrusted: validation commands, secrets, write tokens, privileged tools, and publishing are denied. They receive a `partial_coverage` outcome while the tracer can perform only static review. Unsupported or unsafe event contexts receive a `policy_skip`; invalid, missing, over-budget, or security-weakening policy receives a `configuration_failure`. None of these cases can appear clean.
 
 The engine returns data only; GitHub publication remains the responsibility of an adapter. A future privileged publisher must use the separate SHA-bound, data-only capability class and cannot execute pull-request code.
 
@@ -84,6 +84,9 @@ Project policy is JSON:
     "reviewTimeoutSeconds": 600,
     "maxFindings": 25
   },
+  "verification": {
+    "validationCommands": [{ "argv": ["npm", "test"], "timeoutSeconds": 120 }]
+  },
   "roleProfiles": {
     "reviewer": {
       "provider": "openai",
@@ -104,7 +107,9 @@ Project policy is JSON:
 }
 ```
 
-Policy fields are closed: unsupported active fields fail configuration instead of being ignored. Every policy defines reviewer, challenger, and verifier profiles with a provider, model, and credential-profile name. The trusted Action or CLI adapter supplies those profiles as RunCell `Credentials`; repository policy and review-agent input contain no raw secrets.
+Policy fields are closed: unsupported active fields fail configuration instead of being ignored. Validation commands are trusted base-policy argv arrays, never shell strings. A policy may configure at most 10 commands, each with a timeout no greater than 600 seconds or the complete review timeout; captured stdout and stderr share a 64 KiB bound. On GitHub-hosted runners, the Action executes configured commands without a shell through a credential-free host adapter with abort support, relying on the ephemeral GitHub-hosted job as the isolation boundary. On self-hosted or unknown runners, built-in host execution is unavailable by default; embeddings must inject an isolated `verificationAdapter` to enable validation. The adapter itself does not enforce OS isolation. Local CLI execution remains explicitly user-authorized host execution. Process groups are terminated on timeout or abort where the platform supports them.
+
+Every policy defines reviewer, challenger, and verifier profiles with a provider, model, and credential-profile name. The trusted Action or CLI adapter supplies those profiles as RunCell `Credentials`; repository policy and review-agent input contain no raw secrets.
 
 The default Action profile uses environment variables populated from GitHub Secrets. The default CLI profile uses local Codex, Claude, or other supported Pi credentials. Programmatic deployments can supply RunCell `env`, `local`, `agentDir`, or `shared` credentials. Diffowl intentionally excludes RunCell’s in-memory `apiKeys` mode so raw keys cannot enter role-execution requests. A shared `CredentialStore` can persist and rotate OAuth credentials in a team-controlled database, KV store, vault, or secret manager. Diffowl does not need a hosted provider or permission to modify GitHub Secrets. Missing profile references fail configuration without exposing secret values.
 

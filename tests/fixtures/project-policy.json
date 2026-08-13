@@ -24,5 +24,8 @@
       "model": "gpt-5-mini",
       "credentialProfile": "default"
     }
+  },
+  "verification": {
+    "validationCommands": []
   }
 }

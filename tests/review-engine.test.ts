@@ -20,6 +20,9 @@ const effectivePolicy = {
   version: 1,
   scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
   limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
+  verification: {
+    validationCommands: [{ argv: ["npm", "test"], timeoutSeconds: 30 }],
+  },
   roleProfiles: {
     reviewer: { provider: "openai", model: "gpt-5", credentialProfile: "primary" },
     challenger: {
@@ -121,9 +124,10 @@ function completedRole(request: RoleExecutionRequest): RoleExecutionResult {
       assessments: [
         {
           candidateIndex: 0,
-          state: "limited",
-          explanation: "No consumer context was available.",
-          evidence: ["pull-request.diff"],
+          disposition: "material",
+          explanation: "The scoped diff demonstrates the changed output.",
+          evidenceIds: ["scoped-diff"],
+          limitations: ["Consumer call sites were not inspected."],
         },
       ],
     },
@@ -163,7 +167,10 @@ describe("runReview role execution", () => {
       candidateFindings: [
         {
           summary: "Greeting changes the public output",
-          verification: { state: "limited", evidence: ["pull-request.diff"] },
+          verification: {
+            usedEvidence: [{ id: "scoped-diff", type: "scoped_diff" }],
+            limitations: expect.arrayContaining(["Consumer call sites were not inspected."]),
+          },
         },
       ],
       advisorySuggestions: [{ summary: "Document the greeting change" }],
@@ -177,6 +184,373 @@ describe("runReview role execution", () => {
       },
       executionArtifacts: [{ role: "reviewer" }, { role: "challenger" }, { role: "verifier" }],
       policy: { effective: effectivePolicy },
+    });
+  });
+
+  // The integration assertion keeps the full engine-owned evidence handoff visible.
+  // oxlint-disable-next-line max-lines-per-function
+  it("gathers exact-head repository evidence and trusted validation before verification", async () => {
+    let verifierInput: unknown;
+    const reads: Array<{ headSha: string; path: string; maxBytes: number }> = [];
+    const commands: Array<{ argv: string[]; timeoutSeconds: number; maxOutputBytes: number }> = [];
+
+    const outcome = await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      verificationAdapter: {
+        readRepositoryFile: async (request) => {
+          reads.push(request);
+          return { content: "export const greeting = 'hello owl';", truncated: false };
+        },
+        executeValidation: async (request) => {
+          commands.push(request);
+          return {
+            status: "passed",
+            exitCode: 0,
+            stdout: "1 test passed",
+            stderr: "",
+            truncated: false,
+          };
+        },
+      },
+      executeRole: async (request) => {
+        if (request.step.role === "verifier") verifierInput = request.roleInput;
+        return completedRole(request);
+      },
+    });
+
+    expect(reads).toEqual([
+      expect.objectContaining({
+        headSha: reviewedPullRequest.headSha,
+        path: "src/message.ts",
+        maxBytes: 65_536,
+      }),
+    ]);
+    expect(commands).toEqual([
+      expect.objectContaining({
+        argv: ["npm", "test"],
+        timeoutSeconds: 30,
+        maxOutputBytes: 65_536,
+      }),
+    ]);
+    expect(verifierInput).toMatchObject({
+      evidenceCatalog: [
+        { id: "scoped-diff", type: "scoped_diff" },
+        { id: "repository-file:0", type: "repository_file", path: "src/message.ts" },
+        { id: "validation:0", type: "validation", content: "1 test passed" },
+      ],
+      validationAttempts: [{ status: "passed", argv: ["npm", "test"] }],
+    });
+    expect(outcome).toMatchObject({
+      type: "candidates_generated",
+      verification: {
+        evidenceCatalog: [
+          { id: "scoped-diff" },
+          { id: "repository-file:0" },
+          { id: "validation:0" },
+        ],
+        validationAttempts: [{ status: "passed" }],
+      },
+    });
+  });
+
+  it("does not read candidate locations outside the configured review scope", async () => {
+    const reads: string[] = [];
+    let verifierInput: { evidenceCatalog?: Array<{ path: string }> } | undefined;
+    const outcome = await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      verificationAdapter: {
+        readRepositoryFile: async ({ path }) => {
+          reads.push(path);
+          return { content: "excluded content", truncated: false };
+        },
+        executeValidation: async () => ({
+          status: "passed",
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          truncated: false,
+        }),
+      },
+      executeRole: async (request) => {
+        if (request.step.role === "reviewer") {
+          const result = completedRole(request);
+          if (result.type === "completed" && result.output.role === "reviewer") {
+            result.output.candidateFindings[0]!.location.path = "dist/model-supplied.js";
+          }
+          return result;
+        }
+        if (request.step.role === "verifier") {
+          verifierInput = request.roleInput as typeof verifierInput;
+        }
+        return completedRole(request);
+      },
+    });
+
+    expect(reads).toEqual([]);
+    expect(verifierInput?.evidenceCatalog?.map(({ path }) => path)).not.toContain(
+      "dist/model-supplied.js",
+    );
+    expect(outcome).toMatchObject({
+      type: "candidates_generated",
+      verification: {
+        limitations: expect.arrayContaining([
+          "Repository evidence was not read for out-of-scope path dist/model-supplied.js.",
+        ]),
+      },
+    });
+  });
+
+  it("omits empty evidence and cannot materialize a Finding by citing it", async () => {
+    const emptyDiffInput = { ...representativePullRequest, diff: "" };
+    const outcome = await runReview(emptyDiffInput, {
+      credentialProfiles: { primary: { type: "env" } },
+      verificationAdapter: {
+        readRepositoryFile: async () => ({ content: "", truncated: false }),
+        executeValidation: async () => ({
+          status: "passed",
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          truncated: false,
+        }),
+      },
+      executeRole: async (request) => {
+        if (request.step.role !== "verifier") return completedRole(request);
+        return {
+          type: "completed",
+          output: {
+            role: "verifier",
+            assessments: [
+              {
+                candidateIndex: 0,
+                disposition: "material",
+                evidenceIds: ["scoped-diff", "repository-file:0"],
+                explanation: "Empty evidence supposedly proves the claim.",
+                limitations: [],
+              },
+            ],
+          },
+          artifact: artifact("verifier"),
+        };
+      },
+    });
+
+    expect(outcome).toMatchObject({
+      type: "candidates_generated",
+      candidateFindings: [],
+      verification: {
+        evidenceCatalog: [],
+        limitations: expect.arrayContaining([
+          "The configured review scope produced an empty diff.",
+          "Repository evidence for src/message.ts was empty.",
+        ]),
+      },
+    });
+  });
+
+  // oxlint-disable-next-line complexity
+  it("keeps multibyte verification evidence within byte ceilings", async () => {
+    const multibyte = "😀".repeat(20_000);
+    let verifierInput:
+      | {
+          evidenceCatalog?: Array<{ content: string }>;
+          validationAttempts?: Array<{ stdout: string; stderr: string }>;
+        }
+      | undefined;
+    await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      verificationAdapter: {
+        readRepositoryFile: async () => ({ content: multibyte, truncated: false }),
+        executeValidation: async () => ({
+          status: "passed",
+          exitCode: 0,
+          stdout: multibyte,
+          stderr: multibyte,
+          truncated: false,
+        }),
+      },
+      executeRole: async (request) => {
+        if (request.step.role === "verifier") {
+          verifierInput = request.roleInput as typeof verifierInput;
+        }
+        return completedRole(request);
+      },
+    });
+
+    expect(
+      verifierInput?.evidenceCatalog?.every(
+        ({ content }) => Buffer.byteLength(content) <= 65_536 && !content.includes("�"),
+      ),
+    ).toBe(true);
+    const attempt = verifierInput?.validationAttempts?.[0];
+    expect(
+      Buffer.byteLength(`${attempt?.stdout ?? ""}${attempt?.stderr ?? ""}`),
+    ).toBeLessThanOrEqual(65_536);
+    expect(`${attempt?.stdout ?? ""}${attempt?.stderr ?? ""}`).not.toContain("�");
+  });
+
+  it("keeps combined validation evidence within the exact byte ceiling including separator", async () => {
+    let validationContent = "";
+    await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      verificationAdapter: {
+        readRepositoryFile: async () => undefined,
+        executeValidation: async () => ({
+          status: "passed",
+          exitCode: 0,
+          stdout: "a".repeat(65_534),
+          stderr: "bé",
+          truncated: false,
+        }),
+      },
+      executeRole: async (request) => {
+        if (request.step.role === "verifier") {
+          const context = request.roleInput as {
+            evidenceCatalog: Array<{ id: string; content: string }>;
+          };
+          validationContent =
+            context.evidenceCatalog.find(({ id }) => id === "validation:0")?.content ?? "";
+        }
+        return completedRole(request);
+      },
+    });
+
+    expect(Buffer.byteLength(validationContent)).toBe(65_536);
+    expect(validationContent.endsWith("\nb")).toBe(true);
+    expect(validationContent).not.toContain("é");
+    expect(validationContent).not.toContain("�");
+  });
+
+  it("does not execute configured validation commands when the trust class denies them", async () => {
+    let commandExecuted = false;
+    let verifierInput: unknown;
+    const outcome = await runReview(
+      {
+        ...representativePullRequest,
+        trust: {
+          class: "trusted_same_repo_pull_request",
+          capabilities: {
+            ...representativePullRequest.trust.capabilities,
+            validationCommands: "denied",
+          },
+        },
+      },
+      {
+        credentialProfiles: { primary: { type: "env" } },
+        verificationAdapter: {
+          readRepositoryFile: async () => undefined,
+          executeValidation: async () => {
+            commandExecuted = true;
+            throw new Error("must not execute");
+          },
+        },
+        executeRole: async (request) => {
+          if (request.step.role === "verifier") verifierInput = request.roleInput;
+          return completedRole(request);
+        },
+      },
+    );
+
+    expect(outcome.type).toBe("candidates_generated");
+    expect(commandExecuted).toBe(false);
+    expect(verifierInput).toMatchObject({
+      validationAttempts: [],
+      limitations: expect.arrayContaining([
+        "Configured validation commands were denied by the trust class.",
+      ]),
+    });
+  });
+
+  it("does not let an unavailable validation attempt substantiate a material Finding", async () => {
+    const outcome = await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      verificationAdapter: {
+        readRepositoryFile: async () => undefined,
+        executeValidation: async () => ({
+          status: "error",
+          stdout: "",
+          stderr: "",
+          truncated: false,
+          limitation: "Validation execution is unavailable.",
+        }),
+      },
+      executeRole: async (request) => {
+        if (request.step.role !== "verifier") return completedRole(request);
+        return {
+          type: "completed",
+          output: {
+            role: "verifier",
+            assessments: [
+              {
+                candidateIndex: 0,
+                disposition: "material",
+                evidenceIds: ["validation:0"],
+                explanation: "The unavailable command supposedly proves the claim.",
+                limitations: [],
+              },
+            ],
+          },
+          artifact: artifact("verifier"),
+        };
+      },
+    });
+
+    expect(outcome).toMatchObject({
+      type: "candidates_generated",
+      candidateFindings: [],
+      verification: {
+        validationAttempts: [{ status: "error" }],
+        limitations: expect.arrayContaining(["Validation execution is unavailable."]),
+      },
+    });
+    expect(
+      outcome.type === "candidates_generated"
+        ? outcome.verification.evidenceCatalog.map(({ id }) => id)
+        : [],
+    ).not.toContain("validation:0");
+  });
+
+  it("suppresses evidence-free material assessments and downgrades advisory dispositions", async () => {
+    const outcome = await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      executeRole: async (request) => {
+        if (request.step.role !== "verifier") return completedRole(request);
+        return {
+          type: "completed",
+          output: {
+            role: "verifier",
+            assessments: [
+              {
+                candidateIndex: 0,
+                disposition: "material",
+                evidenceIds: ["unknown-evidence"],
+                explanation: "Unsupported material claim.",
+                limitations: [],
+              },
+              {
+                candidateIndex: 0,
+                disposition: "advisory",
+                evidenceIds: [],
+                explanation: "Worth considering but not material.",
+                limitations: [],
+              },
+            ],
+          },
+          artifact: artifact("verifier"),
+        };
+      },
+    });
+
+    expect(outcome).toMatchObject({
+      type: "candidates_generated",
+      candidateFindings: [],
+      advisorySuggestions: [
+        { summary: "Document the greeting change" },
+        {
+          summary: "Greeting changes the public output",
+          rationale: "Worth considering but not material.",
+        },
+      ],
     });
   });
 
@@ -269,6 +643,9 @@ describe("runReview budget enforcement", () => {
     const timeoutPolicy = {
       ...effectivePolicy,
       limits: { ...effectivePolicy.limits, reviewTimeoutSeconds: 1 },
+      verification: {
+        validationCommands: [{ argv: ["npm", "test"], timeoutSeconds: 1 }],
+      },
     };
     let signal: AbortSignal | undefined;
 
@@ -309,6 +686,8 @@ describe("runReview budget enforcement", () => {
   });
 });
 
+// Closed-policy cases are grouped to keep their shared representative input explicit.
+// oxlint-disable-next-line max-lines-per-function
 describe("runReview policy validation", () => {
   it("fails closed when policy exceeds a non-overridable ceiling", async () => {
     const outcome = await runReview({
@@ -327,6 +706,74 @@ describe("runReview policy validation", () => {
       type: "configuration_failure",
       policySource: representativePullRequest.policy.source,
       reason: "Project policy limits.reviewTimeoutSeconds exceeds the security ceiling of 3600.",
+    });
+  });
+
+  it("rejects validation commands above the closed policy ceilings", async () => {
+    const invalidPolicies = [
+      {
+        ...effectivePolicy,
+        verification: {
+          validationCommands: Array.from({ length: 11 }, () => ({
+            argv: ["npm", "test"],
+            timeoutSeconds: 30,
+          })),
+        },
+      },
+      {
+        ...effectivePolicy,
+        verification: {
+          validationCommands: [{ argv: ["npm", "test"], timeoutSeconds: 601 }],
+        },
+      },
+      {
+        ...effectivePolicy,
+        verification: {
+          validationCommands: [{ argv: ["npm", "test"], timeoutSeconds: 30, shell: true }],
+        },
+      },
+    ];
+
+    const outcomes = await Promise.all(
+      invalidPolicies.map((policy) =>
+        runReview({
+          ...representativePullRequest,
+          policy: {
+            ...representativePullRequest.policy,
+            contents: JSON.stringify(policy),
+          },
+        }),
+      ),
+    );
+    expect(outcomes.map(({ type }) => type)).toEqual([
+      "configuration_failure",
+      "configuration_failure",
+      "configuration_failure",
+    ]);
+  });
+
+  it("rejects a validation timeout longer than the complete review timeout", async () => {
+    const outcome = await runReview(
+      {
+        ...representativePullRequest,
+        policy: {
+          ...representativePullRequest.policy,
+          contents: JSON.stringify({
+            ...effectivePolicy,
+            limits: { ...effectivePolicy.limits, reviewTimeoutSeconds: 20 },
+            verification: {
+              validationCommands: [{ argv: ["npm", "test"], timeoutSeconds: 21 }],
+            },
+          }),
+        },
+      },
+      { credentialProfiles: { primary: { type: "env" } } },
+    );
+
+    expect(outcome).toMatchObject({
+      type: "configuration_failure",
+      reason:
+        "Project policy verification.validationCommands[0].timeoutSeconds exceeds limits.reviewTimeoutSeconds of 20.",
     });
   });
 

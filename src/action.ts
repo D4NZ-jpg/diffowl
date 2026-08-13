@@ -1,13 +1,16 @@
 import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
+import { createHostVerificationAdapter } from "./host-verification.js";
 import {
   PROJECT_POLICY_PATH,
   type DiffowlCredentials,
   type ReviewOutcome,
   type RoleExecutionRequest,
   type RoleExecutionResult,
+  type VerificationAdapter,
   runReview,
+  unavailableVerificationAdapter,
 } from "./review-engine.js";
 import { classifyTrust } from "./trust.js";
 
@@ -28,6 +31,7 @@ export interface ActionIo {
   setOutput(name: string, value: string): Promise<void>;
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>>;
   executeRole?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
+  verificationAdapter?: VerificationAdapter;
 }
 
 function readGitDiff(baseSha: string, headSha: string): Promise<string> {
@@ -131,6 +135,16 @@ async function skipUnsafeContext(io: ActionIo, reason: string): Promise<ReviewOu
   return outcome;
 }
 
+function actionVerificationAdapter(
+  env: NodeJS.ProcessEnv,
+  configured: VerificationAdapter | undefined,
+): VerificationAdapter {
+  if (configured !== undefined) return configured;
+  return env.RUNNER_ENVIRONMENT === "github-hosted"
+    ? createHostVerificationAdapter()
+    : unavailableVerificationAdapter;
+}
+
 export async function runAction(
   env: NodeJS.ProcessEnv,
   io: ActionIo = createActionIo(env),
@@ -186,6 +200,7 @@ export async function runAction(
     {
       credentialProfiles: io.credentialProfiles ?? { default: { type: "env" } },
       executeRole: io.executeRole,
+      verificationAdapter: actionVerificationAdapter(env, io.verificationAdapter),
     },
   );
 

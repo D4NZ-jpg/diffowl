@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines */
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +16,7 @@ const representativePolicy = JSON.stringify({
   version: 1,
   scope: { includePaths: ["src/**"], excludePaths: ["dist/**"] },
   limits: { reviewTimeoutSeconds: 600, maxFindings: 25 },
+  verification: { validationCommands: [] },
   roleProfiles: {
     reviewer: {
       provider: "openai",
@@ -106,6 +108,19 @@ it("supplies an environment credential profile to the Review engine", async () =
       emptyArtifact("challenger"),
       emptyArtifact("verifier"),
     ],
+    verification: {
+      evidenceCatalog: [
+        {
+          id: "scoped-diff",
+          type: "scoped_diff",
+          path: "pull-request.diff",
+          content: representativeDiff,
+          truncated: false,
+        },
+      ],
+      validationAttempts: [],
+      limitations: [],
+    },
     trust: {
       class: "trusted_same_repo_pull_request",
       capabilities: {
@@ -126,6 +141,90 @@ it("supplies an environment credential profile to the Review engine", async () =
     },
   });
   expect(JSON.parse(outputs.get("outcome") ?? "")).toEqual(outcome);
+});
+
+it("records validation as unavailable by default on unknown and self-hosted runners", async () => {
+  const policy = JSON.stringify({
+    ...JSON.parse(representativePolicy),
+    verification: {
+      validationCommands: [
+        { argv: [process.execPath, "-e", "process.stdout.write('passed')"], timeoutSeconds: 5 },
+      ],
+    },
+  });
+
+  const attempts = await Promise.all(
+    [undefined, "self-hosted"].map(async (runnerEnvironment) => {
+      let verifierInput:
+        | { validationAttempts?: Array<{ status: string; limitation?: string }> }
+        | undefined;
+      await runAction(
+        {
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_EVENT_PATH: eventPath,
+          RUNNER_ENVIRONMENT: runnerEnvironment,
+        },
+        {
+          readFile,
+          readDiff: async () => representativeDiff,
+          readPolicy: async () => policy,
+          setOutput: async () => undefined,
+          executeRole: async (request) => {
+            if (request.step.role === "verifier") {
+              verifierInput = request.roleInput as typeof verifierInput;
+            }
+            return emptyRoleResult(request);
+          },
+        },
+      );
+      return verifierInput?.validationAttempts;
+    }),
+  );
+
+  for (const attempt of attempts) {
+    expect(attempt).toEqual([
+      expect.objectContaining({
+        status: "error",
+        limitation: "No validation execution adapter was configured.",
+      }),
+    ]);
+  }
+});
+
+it("executes configured validation by default on a GitHub-hosted runner", async () => {
+  let verifierInput: { validationAttempts?: Array<{ status: string; stdout: string }> } | undefined;
+  const policy = JSON.stringify({
+    ...JSON.parse(representativePolicy),
+    verification: {
+      validationCommands: [
+        { argv: [process.execPath, "-e", "process.stdout.write('passed')"], timeoutSeconds: 5 },
+      ],
+    },
+  });
+
+  await runAction(
+    {
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+      RUNNER_ENVIRONMENT: "github-hosted",
+    },
+    {
+      readFile,
+      readDiff: async () => representativeDiff,
+      readPolicy: async () => policy,
+      setOutput: async () => undefined,
+      executeRole: async (request) => {
+        if (request.step.role === "verifier") {
+          verifierInput = request.roleInput as typeof verifierInput;
+        }
+        return emptyRoleResult(request);
+      },
+    },
+  );
+
+  expect(verifierInput?.validationAttempts).toEqual([
+    expect.objectContaining({ status: "passed", stdout: "passed" }),
+  ]);
 });
 
 it("denies risky capabilities for a fork pull request", async () => {
