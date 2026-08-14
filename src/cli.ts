@@ -41,7 +41,7 @@ interface CliReport {
   mode: CliMode;
   ciTrusted: false;
   trust: ReviewOutcome["trust"];
-  publishing: { requested: boolean; status: "denied_local_invocation"; note: string };
+  publishing: { requested: boolean; status: "not_attempted"; note: string };
   outcome: ReviewOutcome;
   findings: unknown[];
   advisorySuggestions: unknown[];
@@ -188,7 +188,7 @@ function reportFrom(
     trust: outcome.trust,
     publishing: {
       requested: mode === "publish",
-      status: "denied_local_invocation",
+      status: "not_attempted",
       note: "Local CLI output is reproduction data only; it is not GitHub Action trust evidence.",
     },
     outcome,

@@ -40,7 +40,7 @@ const target = {
 };
 const authorization = {
   sourceRunVerified: true,
-  surfaces: ["pull_request_review", "check_run", "summary_comment"] as const,
+  surfaces: ["pull_request_review"] as const,
 };
 
 function cleanOutcome(): ReviewOutcome {
@@ -310,14 +310,12 @@ it("threat: publication treats outcomes as data only and writes only bounded Git
 
   await publishReviewOutcome(transport, target, malicious, authorization);
 
-  expect(new Set(requests.map((request) => request.method))).toEqual(
-    new Set(["GET", "POST", "PATCH"]),
-  );
+  expect(new Set(requests.map((request) => request.method))).toEqual(new Set(["GET"]));
   expect(requests.every((request) => request.path.startsWith(`/repos/${target.repository}/`))).toBe(
     true,
   );
   expect(requests.some((request) => request.path.endsWith("/reviews"))).toBe(false);
-  expect(JSON.stringify(requests.map((request) => request.body))).toContain(
+  expect(JSON.stringify(requests.map((request) => request.body))).not.toContain(
     "$(touch /tmp/diffowl-pwned)",
   );
 });

@@ -1,25 +1,19 @@
-import { randomUUID } from "node:crypto";
-
-import {
-  staleFindingCommentIds,
-  supersedeStaleCheckRuns,
-  supersedeStaleFindingComments,
-} from "./github-freshness.js";
-import type { MaterialFinding, ReviewOutcome } from "./review-engine.js";
-import {
-  checkConclusion,
-  checkOutput,
-  findingBody,
-  isActiveFinding,
-  materialFindings,
-  summaryBody,
-} from "./github-presentation.js";
+import type { MaterialFinding } from "./review-engine.js";
+import { findingBody, isActiveFinding, materialFindings } from "./github-presentation.js";
 import { validatePublicationOutcome } from "./github-publication-validation.js";
-import { beginSummaryPublication, finalizeSummaryPublication } from "./github-summary.js";
 
 const API_VERSION = "2022-11-28";
-const MAX_ANNOTATIONS = 50;
-const REVIEW_CHECK_NAME = "Review OWL";
+
+export class PublicationRefusalError extends Error {
+  constructor(message = "Refusing to publish an invalid, oversized, or stale Review outcome.") {
+    super(message);
+    this.name = "PublicationRefusalError";
+  }
+}
+
+export function isPublicationRefusal(error: unknown): boolean {
+  return error instanceof PublicationRefusalError;
+}
 
 export interface GitHubRequest {
   method: "GET" | "POST" | "PATCH";
@@ -33,24 +27,20 @@ export interface PublicationTarget {
   headSha: string;
   changedLines: ReadonlyArray<{ path: string; line: number }>;
 }
-export type PublicationSurface = "pull_request_review" | "check_run" | "summary_comment";
-export const REQUIRED_PUBLICATION_SURFACES: readonly PublicationSurface[] = [
-  "pull_request_review",
-  "check_run",
-  "summary_comment",
-];
+export type PublicationSurface = "pull_request_review";
+export const REQUIRED_PUBLICATION_SURFACES: readonly PublicationSurface[] = ["pull_request_review"];
 export interface PublicationAuthorization {
   sourceRunVerified: boolean;
   surfaces: readonly PublicationSurface[];
 }
+export type PublicationResult = "complete" | "not_attempted" | "refused" | "incomplete";
 export interface PublicationReceipt {
+  result: PublicationResult;
   headSha: string;
   reviewId?: number;
   reviewUrl?: string;
-  checkRunId: number;
-  summaryCommentId: number;
   inlineCommentCount: number;
-  annotationCount: number;
+  unanchoredFindingCount: number;
 }
 interface ReviewReceipt {
   id: number;
@@ -85,24 +75,24 @@ function inlineFinding(finding: MaterialFinding, lines: Set<string>): finding is
     lines.has(`${finding.location.path}\0${finding.location.line}`)
   );
 }
-function annotation(finding: InlineFinding) {
-  return {
-    path: finding.location.path,
-    start_line: finding.location.line,
-    end_line: finding.location.line,
-    annotation_level: "failure",
-    title: `Review OWL: ${finding.lifecycleState}`,
-    message: finding.summary,
-    raw_details: `${finding.impact}\n\nVerification: ${finding.verificationState.type} — ${finding.verificationState.explanation}`,
-  };
+function reviewBody(unanchored: MaterialFinding[]): string {
+  const lines = ["Review OWL found material Findings. Use these review threads for discussion."];
+  if (unanchored.length > 0) {
+    lines.push("", "### Findings without a current inline anchor");
+    for (const finding of unanchored) {
+      lines.push("", findingBody(finding));
+    }
+  }
+  return lines.join("\n");
 }
 
 async function publishReview(
   request: GitHubTransport,
   target: PublicationTarget,
   findings: InlineFinding[],
+  unanchored: MaterialFinding[],
 ): Promise<ReviewReceipt | undefined> {
-  if (findings.length === 0) return undefined;
+  if (findings.length === 0 && unanchored.length === 0) return undefined;
   const result = asRecord(
     await request({
       method: "POST",
@@ -110,7 +100,7 @@ async function publishReview(
       body: {
         commit_id: target.headSha,
         event: "COMMENT",
-        body: "Review OWL found material Findings. Use the inline threads for discussion.",
+        body: reviewBody(unanchored),
         comments: findings.map((finding) => ({
           path: finding.location.path,
           line: finding.location.line,
@@ -124,30 +114,6 @@ async function publishReview(
   return {
     id: numericId(result, "GitHub review response"),
     ...(typeof result.html_url === "string" ? { htmlUrl: result.html_url } : {}),
-  };
-}
-
-async function publishCheck(
-  request: GitHubTransport,
-  target: PublicationTarget,
-  outcome: ReviewOutcome,
-  inline: InlineFinding[],
-) {
-  const annotations = inline.map(annotation).slice(0, MAX_ANNOTATIONS);
-  const result = await request({
-    method: "POST",
-    path: `/repos/${target.repository}/check-runs`,
-    body: {
-      name: REVIEW_CHECK_NAME,
-      head_sha: target.headSha,
-      status: "completed",
-      conclusion: checkConclusion(outcome),
-      output: { ...checkOutput(outcome), annotations },
-    },
-  });
-  return {
-    id: numericId(result, "GitHub check-run response"),
-    annotationCount: annotations.length,
   };
 }
 
@@ -184,29 +150,16 @@ export async function publishReviewOutcome(
   const lines = changedLineKeys(target);
   const inline = active.filter((finding) => inlineFinding(finding, lines));
   const unanchored = active.filter((finding) => !inlineFinding(finding, lines));
-  const runMarker = randomUUID();
-  const publishingId = await beginSummaryPublication(request, target, runMarker);
-  const staleFindingComments = await staleFindingCommentIds(request, target);
-  const review = await publishReview(request, target, inline);
-  const check = await publishCheck(request, target, validated, inline);
-  await supersedeStaleCheckRuns(request, target, check.id);
   await assertCurrentHead(request, target);
-  const summaryCommentId = await finalizeSummaryPublication(
-    request,
-    target,
-    runMarker,
-    publishingId,
-    summaryBody(validated, unanchored, review?.htmlUrl),
-  );
-  await supersedeStaleFindingComments(request, target, staleFindingComments, summaryCommentId);
+  const review = await publishReview(request, target, inline, unanchored);
+  await assertCurrentHead(request, target);
   return {
+    result: "complete",
     headSha: target.headSha,
     ...(review === undefined ? {} : { reviewId: review.id }),
     ...(review?.htmlUrl === undefined ? {} : { reviewUrl: review.htmlUrl }),
-    checkRunId: check.id,
-    summaryCommentId,
     inlineCommentCount: inline.length,
-    annotationCount: check.annotationCount,
+    unanchoredFindingCount: unanchored.length,
   };
 }
 

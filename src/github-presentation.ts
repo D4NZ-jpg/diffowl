@@ -74,6 +74,10 @@ function evidenceText(finding: MaterialFinding): string {
     .join("\n");
 }
 
+export function findingShortIdentity(finding: MaterialFinding): string {
+  return `F-${createHash("sha256").update(finding.fingerprint.value).digest("hex").slice(0, 8)}`;
+}
+
 function reconciliationHint(finding: MaterialFinding): string {
   const normalized = [
     finding.location.path.trim().toLowerCase(),
@@ -94,6 +98,8 @@ export function findingBody(finding: MaterialFinding): string {
       findingIdentityMarker(finding.fingerprint.value),
       FINDING_COMMENT_MARKER,
       "",
+      `**Finding ID:** \`${findingShortIdentity(finding)}\``,
+      "",
       `**Problem:** ${finding.summary}`,
       "",
       `**Impact:** ${finding.impact}`,
@@ -105,7 +111,7 @@ export function findingBody(finding: MaterialFinding): string {
       "",
       `**Lifecycle state:** **${finding.lifecycleState}**`,
       "",
-      "**Recommended next action:** Confirm the evidence, address the material problem, then rerun Review OWL. If context changes the assessment, reply with `/review-owl accept`, `/review-owl rebut <context>`, `/review-owl suppress <reason>`, `/review-owl ignore <reason>`, `/review-owl resolved`, `/review-owl recheck`, `/review-owl rerun`, `/review-owl explain`, or `/review-owl reassess <context>`.",
+      "**Recommended next action:** Confirm the evidence, address the material problem, then rerun Diffowl. If context changes the assessment, reply with `/diffowl accept`, `/diffowl rebut <context>`, `/diffowl suppress <reason>`, `/diffowl ignore <reason>`, `/diffowl resolved`, `/diffowl recheck`, `/diffowl explain`, or `/diffowl reassess <context>`.",
       "",
       `Publication reconciliation hint (adapter-owned; not Finding identity): \`${reconciliationHint(finding)}\``,
     ].join("\n"),
@@ -210,6 +216,31 @@ function machineOutcome(outcome: ReviewOutcome): { json: string; complete: boole
     }),
     complete: false,
   };
+}
+
+export function jobSummaryBody(
+  outcome: ReviewOutcome,
+  publicationResult: string,
+  reviewUrl?: string,
+): string {
+  const findings = materialFindings(outcome);
+  const attempts = validationAttempts(outcome);
+  const lines = [
+    "## Diffowl Review readiness",
+    "",
+    `**Review readiness:** \`${checkConclusion(outcome)}\``,
+    `**Review outcome:** \`${outcome.type}\``,
+    `**Publication result:** \`${publicationResult}\``,
+    `**Material Findings:** ${findings.length}${findings.length === 0 ? "" : ` (${lifecycleCounts(findings)})`}`,
+    `**Verification count:** ${attempts.length}${attempts.length === 0 ? "" : ` (${attempts.map((attempt) => attempt.status).join(", ")})`}`,
+  ];
+  const reason = outcomeReason(outcome);
+  if (reason !== undefined) lines.push(`**Coverage limits:** ${reason}`);
+  if ("pullRequest" in outcome)
+    lines.push(`**Reviewed revision:** \`${outcome.pullRequest.headSha}\``);
+  if (reviewUrl !== undefined) lines.push(`**Pull-request review:** ${reviewUrl}`);
+  lines.push("", "See the workflow logs for provider, validation, and publication details.");
+  return lines.join("\n");
 }
 
 export function checkOutput(outcome: ReviewOutcome): {

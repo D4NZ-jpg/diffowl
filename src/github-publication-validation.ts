@@ -2,6 +2,7 @@ import type { ReviewOutcome } from "./review-engine.js";
 import { classifyTrust } from "./trust.js";
 import { parseGitHubReviewOutcome } from "./github-outcome-schema.js";
 import {
+  PublicationRefusalError,
   REQUIRED_PUBLICATION_SURFACES,
   type PublicationAuthorization,
   type PublicationTarget,
@@ -60,5 +61,5 @@ export function validatePublicationOutcome(
 }
 
 function rejectPublication(): never {
-  throw new Error("Refusing to publish an invalid, oversized, or stale Review outcome.");
+  throw new PublicationRefusalError();
 }

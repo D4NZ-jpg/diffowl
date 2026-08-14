@@ -2,16 +2,19 @@ import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
 import { type GitHubPullRequestEvent, isPullRequestEvent } from "./action-event.js";
-import type { JsonValue } from "./canonical-json.js";
 import { addedLinesFromDiff } from "./github-diff.js";
 import {
-  REQUIRED_PUBLICATION_SURFACES,
   createGitHubTransport,
   type PublicationAuthorization,
   type PublicationReceipt,
   type PublicationTarget,
   publishReviewOutcome,
 } from "./github-publication.js";
+import {
+  publishActionOutcome,
+  recordNotAttemptedPublication,
+  setReviewOutputs,
+} from "./action-publication.js";
 import {
   type FindingDiscussionComment,
   recognizeFindingDiscussionCommands,
@@ -38,6 +41,7 @@ export interface ActionIo {
   readDiff(baseSha: string, headSha: string): Promise<string>;
   readPolicy(revision: string, path: string): Promise<string | undefined>;
   setOutput(name: string, value: string): Promise<void>;
+  writeJobSummary?(contents: string): Promise<void>;
   listFindingDiscussionComments?(
     repository: string,
     pullRequestNumber: number,
@@ -106,6 +110,10 @@ export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
       }
       await appendFile(outputPath, `${name}=${value}\n`, "utf8");
     },
+    writeJobSummary: async (contents) => {
+      const summaryPath = env.GITHUB_STEP_SUMMARY;
+      if (summaryPath !== undefined) await appendFile(summaryPath, `${contents}\n`, "utf8");
+    },
     ...(transport === undefined
       ? {}
       : {
@@ -131,6 +139,7 @@ async function unsafeContextOutcome(
     trust: classifyTrust({ type: "unsupported", reason }),
   };
   await setReviewOutputs(io, outcome);
+  await recordNotAttemptedPublication(io, outcome);
   return outcome;
 }
 
@@ -180,64 +189,6 @@ async function reviewDependencies(
     reassessedFingerprints: effects.reassessedFingerprints,
     findingDiscussionEvents: effects.events,
   };
-}
-
-async function setReviewOutputs(io: ActionIo, outcome: ReviewOutcome): Promise<void> {
-  await io.setOutput("outcome", JSON.stringify(outcome));
-  if (outcome.run !== undefined) {
-    await io.setOutput("run-id", outcome.run.runId);
-    await io.setOutput("run-metadata", JSON.stringify(outcome.run));
-  }
-}
-
-function publicationFailureOutcome(outcome: ReviewOutcome, error: unknown): ReviewOutcome {
-  if (!("pullRequest" in outcome) || !("policy" in outcome)) return outcome;
-  const reason = error instanceof Error ? error.message : "GitHub publication failed.";
-  return {
-    type: "internal_failure",
-    reason,
-    trust: outcome.trust,
-    pullRequest: outcome.pullRequest,
-    policy: outcome.policy,
-    ...(outcome.run === undefined ? {} : { run: outcome.run }),
-  };
-}
-
-async function publishActionOutcome(
-  io: ActionIo,
-  repository: string,
-  pullRequest: GitHubPullRequestEvent["pull_request"],
-  outcome: ReviewOutcome,
-  changedLines: PublicationTarget["changedLines"],
-  persistence: ReviewPersistenceStore | undefined,
-): Promise<void> {
-  await setReviewOutputs(io, outcome);
-  if (io.publishOutcome === undefined || outcome.trust.class !== "trusted_same_repo_pull_request") {
-    return;
-  }
-  try {
-    const receipt = await io.publishOutcome(
-      {
-        repository,
-        pullRequestNumber: pullRequest.number,
-        headSha: pullRequest.head.sha,
-        changedLines,
-      },
-      outcome,
-      { sourceRunVerified: true, surfaces: REQUIRED_PUBLICATION_SURFACES },
-    );
-    await io.setOutput("publication", JSON.stringify(receipt));
-    if (outcome.run !== undefined) {
-      await persistence?.withTransaction(
-        { repository, pullRequestNumber: pullRequest.number },
-        async (transaction) =>
-          transaction.savePublicationEffects(outcome.run!.runId, receipt as unknown as JsonValue),
-      );
-    }
-  } catch (error) {
-    await setReviewOutputs(io, publicationFailureOutcome(outcome, error));
-    throw error;
-  }
 }
 
 // oxlint-disable-next-line max-lines-per-function

@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
 import { createActionIo, runAction } from "../src/action.js";
+import { actionExitCodeForOutcome } from "../src/action-readiness.js";
+import { PublicationRefusalError } from "../src/github-publication.js";
 import {
   FileSystemReviewPersistenceStore,
   findingIdentityMarker,
@@ -298,14 +300,13 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
         expect(outcome.type).toBe("clean");
         expect(authorization).toEqual({
           sourceRunVerified: true,
-          surfaces: ["pull_request_review", "check_run", "summary_comment"],
+          surfaces: ["pull_request_review"],
         });
         return {
+          result: "complete",
           headSha: target.headSha,
-          checkRunId: 1,
-          summaryCommentId: 2,
           inlineCommentCount: 0,
-          annotationCount: 0,
+          unanchoredFindingCount: 0,
         };
       },
     },
@@ -321,11 +322,10 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
   ]);
   expect(JSON.parse(outputs.get("outcome") ?? "")).toEqual(result);
   const receipt = {
+    result: "complete",
     headSha: reviewedPullRequest.headSha,
-    checkRunId: 1,
-    summaryCommentId: 2,
     inlineCommentCount: 0,
-    annotationCount: 0,
+    unanchoredFindingCount: 0,
   };
   expect(JSON.parse(outputs.get("publication") ?? "")).toEqual(receipt);
   await new FileSystemReviewPersistenceStore(stateDirectory).withTransaction(
@@ -338,6 +338,24 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
   );
 });
 
+it("maps non-clean Review outcomes to a failing workflow check", () => {
+  const clean = { type: "clean", trust: trustedSameRepoTrust };
+  expect(actionExitCodeForOutcome(clean as never)).toBe(0);
+  expect(
+    actionExitCodeForOutcome({
+      type: "provider_failure",
+      reason: "provider failed",
+      trust: trustedSameRepoTrust,
+      pullRequest: reviewedPullRequest,
+      policy: {
+        source: { type: "trusted_base_branch", revision: "base", path: ".diffowl.json" },
+        effective: projectPolicy(),
+      },
+      executionArtifacts: [],
+    } as never),
+  ).toBe(1);
+});
+
 it("removes GITHUB_TOKEN from the engine environment while retaining a publisher", () => {
   const env = { GITHUB_TOKEN: "publisher-secret", GITHUB_OUTPUT: "output" };
   const io = createActionIo(env);
@@ -345,7 +363,7 @@ it("removes GITHUB_TOKEN from the engine environment while retaining a publisher
   expect(io.publishOutcome).toBeTypeOf("function");
 });
 
-it("reports publication denial as a non-clean outcome", async () => {
+async function publicationFailureOutputs(error: Error) {
   const outputs = new Map<string, string>();
   await expect(
     runAction(
@@ -353,26 +371,41 @@ it("reports publication denial as a non-clean outcome", async () => {
       {
         ...capturingActionIo(outputs),
         publishOutcome: async () => {
-          throw new Error("Refusing to publish an invalid, oversized, or stale Review outcome.");
+          throw error;
         },
       },
     ),
   ).rejects.toThrow("Refusing to publish");
-  expect(JSON.parse(outputs.get("outcome") ?? "{}")).toMatchObject({
-    type: "internal_failure",
+  expect(JSON.parse(outputs.get("outcome") ?? "{}")).toMatchObject({ type: "clean" });
+  return JSON.parse(outputs.get("publication") ?? "{}");
+}
+
+it("reports publication denial as a separate incomplete publication", async () => {
+  await expect(
+    publicationFailureOutputs(
+      new Error("Refusing to publish an invalid, oversized, or stale Review outcome."),
+    ),
+  ).resolves.toEqual({
+    result: "incomplete",
     reason: "Refusing to publish an invalid, oversized, or stale Review outcome.",
   });
-  expect(outputs.has("publication")).toBe(false);
 });
 
-it("does not publish when no publisher is configured", async () => {
+it("records publication as refused when publication validation rejects", async () => {
+  await expect(publicationFailureOutputs(new PublicationRefusalError())).resolves.toEqual({
+    result: "refused",
+    reason: "Refusing to publish an invalid, oversized, or stale Review outcome.",
+  });
+});
+
+it("records publication as not attempted when no publisher is configured", async () => {
   const outputs = new Map<string, string>();
   await runAction(
     { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath },
     capturingActionIo(outputs),
   );
   expect(outputs.has("outcome")).toBe(true);
-  expect(outputs.has("publication")).toBe(false);
+  expect(JSON.parse(outputs.get("publication") ?? "{}")).toEqual({ result: "not_attempted" });
 });
 
 it("records validation as unavailable by default on unknown and self-hosted runners", async () => {
@@ -485,7 +518,7 @@ it("skips pull_request_target before reading the event payload", async () => {
 
 it("reports unsupported pull-request shapes before reading repository content", async () => {
   let repositoryRead = false;
-  let output = "";
+  const outputs = new Map<string, string>();
 
   const outcome = await runAction(
     { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: "event.json" },
@@ -499,8 +532,8 @@ it("reports unsupported pull-request shapes before reading repository content", 
         repositoryRead = true;
         return representativePolicy;
       },
-      setOutput: async (_name, value) => {
-        output = value;
+      setOutput: async (name, value) => {
+        outputs.set(name, value);
       },
     },
   );
@@ -521,7 +554,8 @@ it("reports unsupported pull-request shapes before reading repository content", 
       },
     },
   });
-  expect(JSON.parse(output)).toEqual(outcome);
+  expect(JSON.parse(outputs.get("outcome") ?? "{}")).toEqual(outcome);
+  expect(JSON.parse(outputs.get("publication") ?? "{}")).toEqual({ result: "not_attempted" });
 });
 
 it("skips an unsafe pull-request identity before reading repository content", async () => {

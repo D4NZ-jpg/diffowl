@@ -68,7 +68,7 @@ describe("diffowl review", () => {
       ciTrusted: false,
       publishing: {
         requested: false,
-        status: "denied_local_invocation",
+        status: "not_attempted",
       },
       findings: [],
       advisorySuggestions: [],
@@ -117,7 +117,7 @@ describe("diffowl review", () => {
       mode: "publish",
       ciTrusted: false,
       trust: { class: "local_cli", capabilities: { publishing: "denied" } },
-      publishing: { requested: true, status: "denied_local_invocation" },
+      publishing: { requested: true, status: "not_attempted" },
     });
   });
 

@@ -11,10 +11,10 @@ import {
   FINDING_COMMENT_MARKER,
   GITHUB_BODY_LIMIT,
   SUMMARY_MARKER,
-  SUPERSEDED_FINDING_MARKER,
   checkConclusion,
   checkOutput,
   findingBody,
+  findingShortIdentity,
   summaryBody,
 } from "../src/github-presentation.js";
 import { parseGitHubReviewOutcome } from "../src/github-outcome-schema.js";
@@ -31,7 +31,7 @@ const target = {
 
 const authorization = {
   sourceRunVerified: true,
-  surfaces: ["pull_request_review", "check_run", "summary_comment"] as const,
+  surfaces: ["pull_request_review"] as const,
 };
 type IssueCommentPage = Array<{
   id: number;
@@ -394,48 +394,35 @@ describe("GitHub publication presentation", () => {
 // Publication scenarios stay grouped because they share the same observable request sequence.
 // oxlint-disable-next-line max-lines-per-function
 function publicationAdapterTests(): void {
-  it("publishes review threads, check annotations, machine JSON, and a new summary", async () => {
+  it("publishes one non-approving review for actionable findings", async () => {
     const { requests, transport } = fakeTransport();
     const findingsOutcome = outcome("findings");
     const receipt = await publishReviewOutcome(transport, target, findingsOutcome, authorization);
 
     expect(receipt).toEqual({
+      result: "complete",
       headSha: target.headSha,
       reviewId: 41,
-      checkRunId: 42,
-      summaryCommentId: 43,
       inlineCommentCount: 1,
-      annotationCount: 1,
+      unanchoredFindingCount: 0,
     });
     const review = requests.find((request) => request.path.endsWith("/reviews"));
-    expect(review?.body).toMatchObject({ commit_id: target.headSha });
-    const check = requests.find((request) => request.path.endsWith("/check-runs"));
-    expect(check).toBeDefined();
-    expect(check?.body).toMatchObject({
-      head_sha: target.headSha,
-      status: "completed",
-      conclusion: "action_required",
-      output: { annotations: [{ path: "src/handler.ts", start_line: 7 }] },
+    expect(review?.body).toMatchObject({
+      commit_id: target.headSha,
+      event: "COMMENT",
+      comments: [{ path: "src/handler.ts", line: 7, side: "RIGHT" }],
     });
-    const checkBody = check?.body as { output: { text: string } };
-    expect(checkBody.output.text).toContain('"type":"findings"');
-    expect(checkBody.output.text).toContain('"headSha":"2222222222222222222222222222222222222222"');
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        path: expect.stringContaining("/issues/comments/43"),
-        body: { body: expect.stringContaining(SUMMARY_MARKER) },
-      }),
-    );
+    expect(requests.some((request) => request.path.endsWith("/check-runs"))).toBe(false);
+    expect(requests.some((request) => request.path.includes("/issues/comments"))).toBe(false);
     expect(findingsOutcome).not.toHaveProperty("publication");
   });
 
-  it("publishes a valid outcome containing 64 KiB evidence", async () => {
+  it("publishes a valid outcome containing 64 KiB evidence without a duplicate check", async () => {
     const { requests, transport } = fakeTransport();
     await expect(
       publishReviewOutcome(transport, target, outcomeWithLargeEvidence(), authorization),
-    ).resolves.toMatchObject({ checkRunId: 42, summaryCommentId: 43 });
-    expect(requests.some((request) => request.path.endsWith("/check-runs"))).toBe(true);
+    ).resolves.toMatchObject({ result: "complete" });
+    expect(requests.some((request) => request.path.endsWith("/check-runs"))).toBe(false);
   });
 
   it("rejects an actually oversized outcome before GitHub writes", async () => {
@@ -451,118 +438,55 @@ function publicationAdapterTests(): void {
     expect(requests[0]?.method).toBe("GET");
   });
 
-  it("publishes the default pre-RunResult provider failure through check and summary", async () => {
+  it("publishes the default pre-RunResult provider failure without PR timeline noise", async () => {
     const { requests, transport } = fakeTransport();
     await expect(
       publishReviewOutcome(transport, target, providerFailureBeforeRunResult(), authorization),
-    ).resolves.toMatchObject({ checkRunId: 42, summaryCommentId: 43 });
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        method: "POST",
-        path: expect.stringContaining("/check-runs"),
-        body: expect.objectContaining({ conclusion: "failure" }),
-      }),
-    );
+    ).resolves.toMatchObject({ result: "complete" });
+    expect(requests.some((request) => request.method !== "GET")).toBe(false);
   });
 
-  it("limits useful check annotations to the GitHub per-request maximum", async () => {
+  it("does not create a duplicate custom check run", async () => {
     const { requests, transport } = fakeTransport();
-    const manyFindings = Array.from({ length: 51 }, (_, index) => finding(index + 1));
-    const manyTarget = {
-      ...target,
-      changedLines: manyFindings.map((item) => ({
-        path: item.location.path,
-        line: item.location.line ?? 1,
-      })),
-    };
-    const findingsOutcome = {
-      ...outcome("findings"),
-      materialFindings: manyFindings,
-    } as ReviewOutcome;
-    const receipt = await publishReviewOutcome(
-      transport,
-      manyTarget,
-      findingsOutcome,
-      authorization,
-    );
-    const check = requests.find((request) => request.path.endsWith("/check-runs"));
-    const checkBody = check?.body as { output: { annotations: unknown[] } };
-    expect(checkBody.output.annotations).toHaveLength(50);
-    expect(receipt.annotationCount).toBe(50);
+    await publishReviewOutcome(transport, target, outcome("findings"), authorization);
+    expect(requests.some((request) => request.path.includes("/check-runs"))).toBe(false);
   });
 
-  it("paginates summaries and supersedes duplicate current markers", async () => {
-    const unrelated: IssueCommentPage = Array.from({ length: 100 }, (_, index) => ({
-      id: index + 1,
-      body: "unrelated",
-      user: { login: "github-actions[bot]" },
-    }));
-    const { requests, transport } = fakeTransport({
-      commentPages: [
-        unrelated,
-        [
-          { id: 201, body: SUMMARY_MARKER, user: { login: "github-actions[bot]" } },
-          { id: 202, body: SUMMARY_MARKER, user: { login: "github-actions[bot]" } },
-        ],
-      ],
-    });
-    const receipt = await publishReviewOutcome(transport, target, outcome("clean"), authorization);
-    expect(receipt.summaryCommentId).toBe(43);
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        path: expect.stringContaining("/issues/comments/202"),
-        body: { body: expect.stringContaining("superseded-summary") },
-      }),
-    );
+  it("creates no current-summary comment for a clean review", async () => {
+    const { requests, transport } = fakeTransport();
+    await publishReviewOutcome(transport, target, outcome("clean"), authorization);
+    expect(requests.some((request) => request.path.includes("/issues/comments"))).toBe(false);
   });
 
-  it("de-emphasizes stale finding threads and same-head check runs", async () => {
+  it("does not patch stale comments during check-first publication", async () => {
     const { requests, reviewComments, transport } = fakeTransport({
-      checkRuns: [21, 42],
       reviewComments: [
         {
           id: 51,
           body: `${FINDING_COMMENT_MARKER}\nold finding`,
           user: { login: "github-actions[bot]" },
         },
-        {
-          id: 52,
-          body: `${FINDING_COMMENT_MARKER}\nhuman text`,
-          user: { login: "someone-else" },
-        },
       ],
     });
     await publishReviewOutcome(transport, target, outcome("findings"), authorization);
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        path: expect.stringContaining("/check-runs/21"),
-        body: expect.objectContaining({ conclusion: "neutral" }),
-      }),
-    );
-    expect(requests.some((request) => request.path.endsWith("/check-runs/42"))).toBe(false);
-    expect(reviewComments[0]?.body).toContain(SUPERSEDED_FINDING_MARKER);
-    expect(reviewComments[0]?.body).toContain("#issuecomment-43");
-    expect(reviewComments[1]?.body).toContain("human text");
+    expect(requests.some((request) => request.method === "PATCH")).toBe(false);
+    expect(reviewComments[0]?.body).toContain("old finding");
   });
 
-  it("updates the existing github-actions summary and skips an unanchored review", async () => {
+  it("puts unanchored actionable findings in the pull-request review body", async () => {
     const { requests, transport } = fakeTransport({ existingSummary: true });
     const findingsOutcome = {
       ...outcome("findings"),
       materialFindings: [finding(null)],
     } as ReviewOutcome;
     const receipt = await publishReviewOutcome(transport, target, findingsOutcome, authorization);
-    expect(receipt.reviewId).toBeUndefined();
+    expect(receipt.reviewId).toBe(41);
     expect(receipt.inlineCommentCount).toBe(0);
-    expect(requests.some((request) => request.path.endsWith("/reviews"))).toBe(false);
-    expect(requests).toContainEqual(
-      expect.objectContaining({
-        method: "PATCH",
-        path: expect.stringContaining("/issues/comments/31"),
-      }),
-    );
+    expect(receipt.unanchoredFindingCount).toBe(1);
+    const review = requests.find((request) => request.path.endsWith("/reviews"));
+    expect(JSON.stringify(review?.body)).toContain("Findings without a current inline anchor");
+    expect(JSON.stringify(review?.body)).toContain(findingShortIdentity(finding(null)));
+    expect(JSON.stringify(review?.body)).toContain(findingFingerprint.value);
   });
 
   it("rejects an outcome that is not bound to the publication target", async () => {
@@ -593,7 +517,7 @@ function publicationAdapterTests(): void {
     for (const [reviewOutcome, provenance] of [
       [outcome("clean"), undefined],
       [outcome("clean"), { ...authorization, sourceRunVerified: false }],
-      [outcome("clean"), { ...authorization, surfaces: ["check_run", "summary_comment"] }],
+      [outcome("clean"), { ...authorization, surfaces: [] }],
       [{ type: "findings", trust: trustedSameRepoTrust, materialFindings: [{}] }, authorization],
     ] as const) {
       const { requests, transport } = fakeTransport();
@@ -628,63 +552,40 @@ function publicationAdapterTests(): void {
       authorization,
     );
     expect(receipt.inlineCommentCount).toBe(2);
-    expect(receipt.annotationCount).toBe(2);
-    const summary = requests
-      .map((_request, index) => requests[requests.length - 1 - index] as GitHubRequest)
-      .find(
-        (request) =>
-          request.path.includes("/issues/comments/43") &&
-          request.method === "PATCH" &&
-          JSON.stringify(request.body).includes(SUMMARY_MARKER),
-      );
-    expect(JSON.stringify(summary?.body)).toContain("line");
-    expect(JSON.stringify(summary?.body)).toContain("resolved: 1");
+    expect(receipt.unanchoredFindingCount).toBe(1);
+    const review = requests.find((request) => request.path.endsWith("/reviews"));
+    expect(JSON.stringify(review?.body)).toContain("Findings without a current inline anchor");
   });
 
-  it.each([
-    ["review", "/reviews"],
-    ["check", "/check-runs"],
-  ])("leaves no authoritative summary when %s publication fails", async (_name, failPath) => {
-    const { comments, transport } = fakeTransport({ existingSummary: true, failPath });
+  it("does not create a summary comment when review publication fails", async () => {
+    const { requests, transport } = fakeTransport({ existingSummary: true, failPath: "/reviews" });
     await expect(
       publishReviewOutcome(transport, target, outcome("findings"), authorization),
     ).rejects.toThrow("injected publication failure");
-    expect(comments.some((comment) => comment.body.includes(SUMMARY_MARKER))).toBe(false);
+    expect(requests.some((request) => request.path.includes("/issues/comments"))).toBe(false);
   });
 
-  it("leaves no authoritative summary when the head changes during publication", async () => {
-    const { comments, transport } = fakeTransport({
+  it("fails if the head changes during publication", async () => {
+    const { requests, transport } = fakeTransport({
       existingSummary: true,
       currentHeads: [target.headSha, "3333333333333333333333333333333333333333"],
     });
     await expect(
       publishReviewOutcome(transport, target, outcome("findings"), authorization),
     ).rejects.toThrow("stale Review outcome");
-    expect(comments.some((comment) => comment.body.includes(SUMMARY_MARKER))).toBe(false);
+    expect(requests.some((request) => request.path.includes("/issues/comments"))).toBe(false);
   });
 
-  it("loses deterministically to a newer concurrent publishing marker", async () => {
-    const base = fakeTransport();
-    const transport: GitHubTransport = async (request) => {
-      const result = await base.transport(request);
-      if (request.method === "POST" && request.path.endsWith("/issues/42/comments")) {
-        base.comments.push({
-          id: 44,
-          body: "<!-- diffowl:publishing-summary:v1 run=newer head=2222222222222222222222222222222222222222 -->",
-          user: { login: "github-actions[bot]" },
-        });
-      }
-      return result;
-    };
-    await expect(
-      publishReviewOutcome(transport, target, outcome("clean"), authorization),
-    ).rejects.toThrow("superseded by a concurrent run");
-    expect(
-      base.comments.some(
-        (comment) =>
-          comment.user.login === "github-actions[bot]" && comment.body.includes(SUMMARY_MARKER),
-      ),
-    ).toBe(false);
+  it("returns a complete receipt for a clean review without visible PR effects", async () => {
+    const { requests, transport } = fakeTransport();
+    const receipt = await publishReviewOutcome(transport, target, outcome("clean"), authorization);
+    expect(receipt).toEqual({
+      result: "complete",
+      headSha: target.headSha,
+      inlineCommentCount: 0,
+      unanchoredFindingCount: 0,
+    });
+    expect(requests.some((request) => request.method !== "GET")).toBe(false);
   });
 
   it("sets versioned GitHub API headers without exposing token in payloads", async () => {
