@@ -3,6 +3,7 @@ import type { GitHubPullRequestEvent } from "./action-event.js";
 import type { JsonValue } from "./canonical-json.js";
 import { jobSummaryBody } from "./github-presentation.js";
 import {
+  IncompletePublicationError,
   REQUIRED_PUBLICATION_SURFACES,
   isPublicationRefusal,
   type PublicationReceipt,
@@ -38,7 +39,12 @@ async function recordPublicationOutput(
 ): Promise<void> {
   await io.setOutput("publication", JSON.stringify(receipt));
   await io.writeJobSummary?.(
-    jobSummaryBody(outcome, receipt.result, "reviewUrl" in receipt ? receipt.reviewUrl : undefined),
+    jobSummaryBody(
+      outcome,
+      receipt.result,
+      "reviewUrl" in receipt ? receipt.reviewUrl : undefined,
+      io.workflowRunUrl,
+    ),
   );
 }
 
@@ -47,6 +53,56 @@ export async function recordNotAttemptedPublication(
   outcome: ReviewOutcome,
 ): Promise<void> {
   await recordPublicationOutput(io, outcome, publicationOutput("not_attempted"));
+}
+
+async function savePublicationEffects(
+  persistence: ReviewPersistenceStore | undefined,
+  repository: string,
+  pullRequestNumber: number,
+  outcome: ReviewOutcome,
+  receipt: PublicationReceipt,
+): Promise<void> {
+  if (persistence === undefined || outcome.run === undefined) return;
+  await persistence.withTransaction({ repository, pullRequestNumber }, async (transaction) =>
+    transaction.savePublicationEffects(outcome.run!.runId, receipt as unknown as JsonValue),
+  );
+}
+
+function incompleteEffects(
+  confirmedEffects: PublicationReceipt,
+  error: unknown,
+): PublicationReceipt {
+  return {
+    ...confirmedEffects,
+    result: "incomplete",
+    reason: error instanceof Error ? error.message : "GitHub publication failed.",
+  };
+}
+
+async function recordFailureOutput(
+  io: ActionIo,
+  outcome: ReviewOutcome,
+  publication: PublicationReceipt | { result: PublicationResult; reason?: string },
+): Promise<void> {
+  try {
+    await recordPublicationOutput(io, outcome, publication);
+  } catch {
+    // The original required-surface failure remains the Action failure.
+  }
+}
+
+async function preserveFailureEffects(
+  persistence: ReviewPersistenceStore | undefined,
+  repository: string,
+  pullRequestNumber: number,
+  outcome: ReviewOutcome,
+  effects: PublicationReceipt,
+): Promise<void> {
+  try {
+    await savePublicationEffects(persistence, repository, pullRequestNumber, outcome, effects);
+  } catch {
+    // Failure reporting must still reach the available Action surfaces.
+  }
 }
 
 export async function publishActionOutcome(
@@ -62,8 +118,9 @@ export async function publishActionOutcome(
     await recordNotAttemptedPublication(io, outcome);
     return;
   }
+  let confirmedEffects: PublicationReceipt | undefined;
   try {
-    const receipt = await io.publishOutcome(
+    confirmedEffects = await io.publishOutcome(
       {
         repository,
         pullRequestNumber: pullRequest.number,
@@ -73,20 +130,26 @@ export async function publishActionOutcome(
       outcome,
       { sourceRunVerified: true, surfaces: REQUIRED_PUBLICATION_SURFACES },
     );
-    await recordPublicationOutput(io, outcome, receipt);
-    if (outcome.run !== undefined) {
-      await persistence?.withTransaction(
-        { repository, pullRequestNumber: pullRequest.number },
-        async (transaction) =>
-          transaction.savePublicationEffects(outcome.run!.runId, receipt as unknown as JsonValue),
-      );
-    }
-  } catch (error) {
-    await recordPublicationOutput(
-      io,
+    await savePublicationEffects(
+      persistence,
+      repository,
+      pullRequest.number,
       outcome,
-      publicationOutput(isPublicationRefusal(error) ? "refused" : "incomplete", error),
+      confirmedEffects,
     );
+    await recordPublicationOutput(io, outcome, confirmedEffects);
+  } catch (error) {
+    const effects =
+      error instanceof IncompletePublicationError
+        ? error.confirmedEffects
+        : confirmedEffects === undefined
+          ? undefined
+          : incompleteEffects(confirmedEffects, error);
+    const publication =
+      effects ?? publicationOutput(isPublicationRefusal(error) ? "refused" : "incomplete", error);
+    if (effects !== undefined)
+      await preserveFailureEffects(persistence, repository, pullRequest.number, outcome, effects);
+    await recordFailureOutput(io, outcome, publication);
     throw error;
   }
 }

@@ -107,6 +107,16 @@ async function writePullRequestEvent(
   return eventPath;
 }
 
+it("cancels a superseded pull-request review workflow", async () => {
+  const workflow = await readFile(
+    join(projectRoot, "examples/representative-repository/.github/workflows/review-owl.yml"),
+    "utf8",
+  );
+
+  expect(workflow).toContain("group: review-owl-${{ github.event.pull_request.number }}");
+  expect(workflow).toContain("cancel-in-progress: true");
+});
+
 // oxlint-disable-next-line max-lines-per-function
 describe("installable Review OWL Action", () => {
   // oxlint-disable-next-line max-lines-per-function

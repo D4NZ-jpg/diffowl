@@ -126,6 +126,33 @@ function outcomeReason(outcome: ReviewOutcome): string | undefined {
   return undefined;
 }
 
+function reviewReadiness(outcome: ReviewOutcome): string {
+  switch (outcome.type) {
+    case "clean":
+      return "ready for targeted human review";
+    case "findings":
+      return "return to author";
+    case "policy_skip":
+    case "unsupported_change":
+      return "Project-policy exclusion";
+    default:
+      return "no defensible readiness result";
+  }
+}
+
+function coverageLimits(outcome: ReviewOutcome): string {
+  const reason = outcomeReason(outcome);
+  if (reason !== undefined) return reason;
+  if ("coverage" in outcome) {
+    const gaps = outcome.verification.coverageGaps;
+    const limitations = outcome.verification.limitations;
+    if (gaps.length === 0 && limitations.length === 0)
+      return "Completed permitted review; no coverage gaps were recorded.";
+    return [...gaps, ...limitations].join("; ");
+  }
+  return "Review did not record completed permitted coverage.";
+}
+
 function validationAttempts(outcome: ReviewOutcome): ValidationAttempt[] {
   return "verification" in outcome && outcome.verification !== undefined
     ? outcome.verification.validationAttempts
@@ -222,24 +249,24 @@ export function jobSummaryBody(
   outcome: ReviewOutcome,
   publicationResult: string,
   reviewUrl?: string,
+  workflowRunUrl?: string,
 ): string {
   const findings = materialFindings(outcome);
   const attempts = validationAttempts(outcome);
   const lines = [
     "## Diffowl Review readiness",
     "",
-    `**Review readiness:** \`${checkConclusion(outcome)}\``,
+    `**Review readiness:** \`${reviewReadiness(outcome)}\``,
     `**Review outcome:** \`${outcome.type}\``,
     `**Publication result:** \`${publicationResult}\``,
     `**Material Findings:** ${findings.length}${findings.length === 0 ? "" : ` (${lifecycleCounts(findings)})`}`,
     `**Verification count:** ${attempts.length}${attempts.length === 0 ? "" : ` (${attempts.map((attempt) => attempt.status).join(", ")})`}`,
+    `**Coverage limits:** ${coverageLimits(outcome)}`,
   ];
-  const reason = outcomeReason(outcome);
-  if (reason !== undefined) lines.push(`**Coverage limits:** ${reason}`);
   if ("pullRequest" in outcome)
     lines.push(`**Reviewed revision:** \`${outcome.pullRequest.headSha}\``);
-  if (reviewUrl !== undefined) lines.push(`**Pull-request review:** ${reviewUrl}`);
-  lines.push("", "See the workflow logs for provider, validation, and publication details.");
+  if (reviewUrl !== undefined) lines.push(`[Pull-request review](${reviewUrl})`);
+  if (workflowRunUrl !== undefined) lines.push(`[Workflow logs](${workflowRunUrl})`);
   return lines.join("\n");
 }
 

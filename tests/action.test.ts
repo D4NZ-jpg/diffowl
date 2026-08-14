@@ -4,9 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, expect, it } from "vitest";
 
+import { publishActionOutcome } from "../src/action-publication.js";
 import { createActionIo, runAction } from "../src/action.js";
 import { actionExitCodeForOutcome } from "../src/action-readiness.js";
-import { PublicationRefusalError } from "../src/github-publication.js";
+import { IncompletePublicationError, PublicationRefusalError } from "../src/github-publication.js";
 import {
   FileSystemReviewPersistenceStore,
   findingIdentityMarker,
@@ -132,6 +133,32 @@ function capturingActionIo(outputs: Map<string, string>) {
     },
     executeRole: async (request: RoleExecutionRequest) => emptyRoleResult(request),
   };
+}
+
+const confirmedReviewEffects = {
+  headSha: reviewedPullRequest.headSha,
+  reviewId: 41,
+  inlineCommentCount: 1,
+  unanchoredFindingCount: 0,
+};
+
+async function expectPersistedEffects(
+  stateDirectory: string,
+  runId: string | undefined,
+  expected: Record<string, unknown>,
+): Promise<void> {
+  await new FileSystemReviewPersistenceStore(stateDirectory).withTransaction(
+    { repository: reviewedPullRequest.repository, pullRequestNumber: reviewedPullRequest.number },
+    async (transaction) => {
+      expect(await transaction.loadPublicationEffects(runId ?? "missing")).toMatchObject(expected);
+    },
+  );
+}
+
+function expectCompleteJobSummary(summary: string): void {
+  expect(summary).toContain("**Review readiness:** `ready for targeted human review`");
+  expect(summary).toContain("[Pull-request review](https://github.example/review/41)");
+  expect(summary).toContain("[Workflow logs](https://github.example/actions/runs/99)");
 }
 
 // The adapter contract is intentionally asserted in one integration-style example.
@@ -283,9 +310,11 @@ it("applies author Finding discussion replies from the Action adapter", async ()
   ]);
 });
 
+// oxlint-disable-next-line max-lines-per-function
 it("publishes, reports, and persists adapter-owned receipts when a publisher is injected", async () => {
   const stateDirectory = await stateDirectories.create();
   const outputs = new Map<string, string>();
+  const summaries: string[] = [];
   const calls: Array<{ repository: string; pullRequestNumber: number; headSha: string }> = [];
   const result = await runAction(
     {
@@ -295,6 +324,10 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
     },
     {
       ...capturingActionIo(outputs),
+      workflowRunUrl: "https://github.example/actions/runs/99",
+      writeJobSummary: async (summary) => {
+        summaries.push(summary);
+      },
       publishOutcome: async (target, outcome, authorization) => {
         calls.push(target);
         expect(outcome.type).toBe("clean");
@@ -305,6 +338,7 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
         return {
           result: "complete",
           headSha: target.headSha,
+          reviewUrl: "https://github.example/review/41",
           inlineCommentCount: 0,
           unanchoredFindingCount: 0,
         };
@@ -324,10 +358,13 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
   const receipt = {
     result: "complete",
     headSha: reviewedPullRequest.headSha,
+    reviewUrl: "https://github.example/review/41",
     inlineCommentCount: 0,
     unanchoredFindingCount: 0,
   };
   expect(JSON.parse(outputs.get("publication") ?? "")).toEqual(receipt);
+  expect(summaries).toHaveLength(1);
+  expectCompleteJobSummary(summaries[0] ?? "");
   await new FileSystemReviewPersistenceStore(stateDirectory).withTransaction(
     { repository: reviewedPullRequest.repository, pullRequestNumber: reviewedPullRequest.number },
     async (transaction) => {
@@ -396,6 +433,116 @@ it("records publication as refused when publication validation rejects", async (
     result: "refused",
     reason: "Refusing to publish an invalid, oversized, or stale Review outcome.",
   });
+});
+
+it("preserves confirmed effects when job-summary publication fails", async () => {
+  const stateDirectory = await stateDirectories.create();
+  const outputs = new Map<string, string>();
+  const confirmedEffects = { ...confirmedReviewEffects, result: "complete" as const };
+
+  await expect(
+    runAction(
+      {
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: eventPath,
+        INPUT_STATE_DIRECTORY: stateDirectory,
+      },
+      {
+        ...capturingActionIo(outputs),
+        executeRole: async (request) => materialRoleResult(request),
+        publishOutcome: async () => confirmedEffects,
+        writeJobSummary: async () => {
+          throw new Error("job summary unavailable");
+        },
+      },
+    ),
+  ).rejects.toThrow("job summary unavailable");
+
+  expect(JSON.parse(outputs.get("publication") ?? "{}")).toMatchObject({
+    ...confirmedEffects,
+    result: "incomplete",
+    reason: "job summary unavailable",
+  });
+  const outcome = JSON.parse(outputs.get("outcome") ?? "{}") as { run?: { runId?: string } };
+  await expectPersistedEffects(stateDirectory, outcome.run?.runId, {
+    reviewId: 41,
+    result: "incomplete",
+  });
+});
+
+it("reports incomplete publication when confirmed-effect persistence fails", async () => {
+  const outputs = new Map<string, string>();
+  const summaries: string[] = [];
+  const outcome = {
+    type: "clean",
+    trust: trustedSameRepoTrust,
+    pullRequest: reviewedPullRequest,
+    materialFindings: [],
+    run: { runId: "run-1" },
+  };
+  const io = {
+    ...capturingActionIo(outputs),
+    writeJobSummary: async (summary: string) => {
+      summaries.push(summary);
+    },
+    publishOutcome: async () => ({ ...confirmedReviewEffects, result: "complete" as const }),
+  };
+
+  await expect(
+    publishActionOutcome(
+      io,
+      reviewedPullRequest.repository,
+      {
+        number: reviewedPullRequest.number,
+        head: { sha: reviewedPullRequest.headSha },
+      } as never,
+      outcome as never,
+      [],
+      {
+        withTransaction: async () => {
+          throw new Error("Finding ledger unavailable");
+        },
+      },
+    ),
+  ).rejects.toThrow("Finding ledger unavailable");
+
+  expect(JSON.parse(outputs.get("publication") ?? "{}")).toMatchObject({
+    result: "incomplete",
+    reviewId: 41,
+    reason: "Finding ledger unavailable",
+  });
+  expect(summaries.at(-1)).toContain("**Publication result:** `incomplete`");
+});
+
+it("records confirmed effects when required publication is incomplete", async () => {
+  const stateDirectory = await stateDirectories.create();
+  const outputs = new Map<string, string>();
+  const receipt = {
+    ...confirmedReviewEffects,
+    result: "incomplete" as const,
+    reason: "The pull-request head changed after review creation.",
+  };
+
+  await expect(
+    runAction(
+      {
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: eventPath,
+        INPUT_STATE_DIRECTORY: stateDirectory,
+      },
+      {
+        ...capturingActionIo(outputs),
+        executeRole: async (request) => materialRoleResult(request),
+        publishOutcome: async () => {
+          throw new IncompletePublicationError(receipt.reason, receipt);
+        },
+      },
+    ),
+  ).rejects.toThrow(receipt.reason);
+
+  expect(JSON.parse(outputs.get("publication") ?? "{}")).toEqual(receipt);
+  const outcome = JSON.parse(outputs.get("outcome") ?? "{}") as { run?: { runId?: string } };
+  await expectPersistedEffects(stateDirectory, outcome.run?.runId, receipt);
 });
 
 it("records publication as not attempted when no publisher is configured", async () => {

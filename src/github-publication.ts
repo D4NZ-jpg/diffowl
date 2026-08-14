@@ -1,5 +1,10 @@
 import type { MaterialFinding } from "./review-engine.js";
-import { findingBody, isActiveFinding, materialFindings } from "./github-presentation.js";
+import {
+  GITHUB_BODY_LIMIT,
+  findingBody,
+  isActiveFinding,
+  materialFindings,
+} from "./github-presentation.js";
 import { validatePublicationOutcome } from "./github-publication-validation.js";
 
 const API_VERSION = "2022-11-28";
@@ -8,6 +13,16 @@ export class PublicationRefusalError extends Error {
   constructor(message = "Refusing to publish an invalid, oversized, or stale Review outcome.") {
     super(message);
     this.name = "PublicationRefusalError";
+  }
+}
+
+export class IncompletePublicationError extends Error {
+  constructor(
+    message: string,
+    readonly confirmedEffects: PublicationReceipt,
+  ) {
+    super(message);
+    this.name = "IncompletePublicationError";
   }
 }
 
@@ -39,8 +54,10 @@ export interface PublicationReceipt {
   headSha: string;
   reviewId?: number;
   reviewUrl?: string;
+  reviewCreated?: boolean;
   inlineCommentCount: number;
   unanchoredFindingCount: number;
+  reason?: string;
 }
 interface ReviewReceipt {
   id: number;
@@ -93,41 +110,65 @@ async function publishReview(
   unanchored: MaterialFinding[],
 ): Promise<ReviewReceipt | undefined> {
   if (findings.length === 0 && unanchored.length === 0) return undefined;
-  const result = asRecord(
-    await request({
-      method: "POST",
-      path: `/repos/${target.repository}/pulls/${target.pullRequestNumber}/reviews`,
-      body: {
-        commit_id: target.headSha,
-        event: "COMMENT",
-        body: reviewBody(unanchored),
-        comments: findings.map((finding) => ({
-          path: finding.location.path,
-          line: finding.location.line,
-          side: "RIGHT",
-          body: findingBody(finding),
-        })),
-      },
-    }),
-    "GitHub review response",
-  );
-  return {
-    id: numericId(result, "GitHub review response"),
-    ...(typeof result.html_url === "string" ? { htmlUrl: result.html_url } : {}),
-  };
+  const body = reviewBody(unanchored);
+  const comments = findings.map((finding) => ({
+    path: finding.location.path,
+    line: finding.location.line,
+    side: "RIGHT",
+    body: findingBody(finding),
+  }));
+  if (
+    Buffer.byteLength(body) > GITHUB_BODY_LIMIT ||
+    comments.some((comment) => Buffer.byteLength(comment.body) > GITHUB_BODY_LIMIT)
+  ) {
+    throw new PublicationRefusalError();
+  }
+  const response = await request({
+    method: "POST",
+    path: `/repos/${target.repository}/pulls/${target.pullRequestNumber}/reviews`,
+    body: { commit_id: target.headSha, event: "COMMENT", body, comments },
+  });
+  try {
+    const result = asRecord(response, "GitHub review response");
+    return {
+      id: numericId(result, "GitHub review response"),
+      ...(typeof result.html_url === "string" ? { htmlUrl: result.html_url } : {}),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GitHub review response was invalid.";
+    throw new IncompletePublicationError(message, {
+      result: "incomplete",
+      headSha: target.headSha,
+      reviewCreated: true,
+      inlineCommentCount: findings.length,
+      unanchoredFindingCount: unanchored.length,
+      reason: message,
+    });
+  }
+}
+
+async function readCurrentHead(
+  request: GitHubTransport,
+  target: PublicationTarget,
+): Promise<string> {
+  try {
+    return currentHead(
+      await request({
+        method: "GET",
+        path: `/repos/${target.repository}/pulls/${target.pullRequestNumber}`,
+      }),
+    );
+  } catch {
+    throw new PublicationRefusalError();
+  }
 }
 
 async function assertCurrentHead(
   request: GitHubTransport,
   target: PublicationTarget,
 ): Promise<void> {
-  const response = await request({
-    method: "GET",
-    path: `/repos/${target.repository}/pulls/${target.pullRequestNumber}`,
-  });
-  if (currentHead(response) !== target.headSha) {
-    throw new Error("Refusing to publish an invalid, oversized, or stale Review outcome.");
-  }
+  if ((await readCurrentHead(request, target)) !== target.headSha)
+    throw new PublicationRefusalError();
 }
 
 export async function publishReviewOutcome(
@@ -136,15 +177,11 @@ export async function publishReviewOutcome(
   outcome: unknown,
   authorization?: PublicationAuthorization,
 ): Promise<PublicationReceipt> {
-  const pullRequest = await request({
-    method: "GET",
-    path: `/repos/${target.repository}/pulls/${target.pullRequestNumber}`,
-  });
   const validated = validatePublicationOutcome(
     outcome,
     target,
     authorization,
-    currentHead(pullRequest) === target.headSha,
+    (await readCurrentHead(request, target)) === target.headSha,
   );
   const active = materialFindings(validated).filter(isActiveFinding);
   const lines = changedLineKeys(target);
@@ -152,7 +189,21 @@ export async function publishReviewOutcome(
   const unanchored = active.filter((finding) => !inlineFinding(finding, lines));
   await assertCurrentHead(request, target);
   const review = await publishReview(request, target, inline, unanchored);
-  await assertCurrentHead(request, target);
+  try {
+    await assertCurrentHead(request, target);
+  } catch (error) {
+    if (review === undefined) throw error;
+    const message = error instanceof Error ? error.message : "GitHub publication failed.";
+    throw new IncompletePublicationError(message, {
+      result: "incomplete",
+      headSha: target.headSha,
+      reviewId: review.id,
+      ...(review.htmlUrl === undefined ? {} : { reviewUrl: review.htmlUrl }),
+      inlineCommentCount: inline.length,
+      unanchoredFindingCount: unanchored.length,
+      reason: message,
+    });
+  }
   return {
     result: "complete",
     headSha: target.headSha,

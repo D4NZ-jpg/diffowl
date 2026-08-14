@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  IncompletePublicationError,
+  PublicationRefusalError,
   createGitHubTransport,
   type GitHubRequest,
   type GitHubTransport,
@@ -15,6 +17,7 @@ import {
   checkOutput,
   findingBody,
   findingShortIdentity,
+  jobSummaryBody,
   summaryBody,
 } from "../src/github-presentation.js";
 import { parseGitHubReviewOutcome } from "../src/github-outcome-schema.js";
@@ -152,6 +155,7 @@ function fakeTransport(
     currentHeads?: string[];
     reviewComments?: IssueCommentPage;
     checkRuns?: number[];
+    reviewResponse?: unknown;
   } = {},
 ) {
   const requests: GitHubRequest[] = [];
@@ -196,7 +200,7 @@ function fakeTransport(
       }
       return comments.slice((page - 1) * 100, page * 100);
     }
-    if (request.path.endsWith("/reviews")) return { id: 41 };
+    if (request.path.endsWith("/reviews")) return options.reviewResponse ?? { id: 41 };
     if (request.path.endsWith("/check-runs")) return { id: 42 };
     const patchedReviewCommentId = /\/pulls\/comments\/(\d+)$/u.exec(request.path)?.[1];
     if (patchedReviewCommentId !== undefined) {
@@ -222,6 +226,16 @@ function fakeTransport(
     return { id: 43 };
   };
   return { comments, requests, reviewComments, transport };
+}
+
+async function expectRefusedBeforeReview(
+  options: Parameters<typeof fakeTransport>[0],
+): Promise<void> {
+  const { requests, transport } = fakeTransport(options);
+  await expect(
+    publishReviewOutcome(transport, target, outcome("findings"), authorization),
+  ).rejects.toBeInstanceOf(PublicationRefusalError);
+  expect(requests.some((request) => request.path.endsWith("/reviews"))).toBe(false);
 }
 
 function providerFailureBeforeRunResult() {
@@ -389,6 +403,29 @@ describe("GitHub publication presentation", () => {
     expect(summaryBody(findingsOutcome)).toContain("Findings without a current inline anchor");
     expect(summaryBody(findingsOutcome)).toContain("Null input crashes");
   });
+
+  it("identifies every required job-summary fact and relevant link", () => {
+    const body = jobSummaryBody(
+      outcome("clean"),
+      "complete",
+      "https://github.example/review/41",
+      "https://github.example/actions/runs/99",
+    );
+
+    for (const phrase of [
+      "**Review readiness:** `ready for targeted human review`",
+      "**Review outcome:** `clean`",
+      `**Reviewed revision:** \`${reviewedPullRequest.headSha}\``,
+      "**Material Findings:** 0",
+      "**Verification count:** 0",
+      "**Coverage limits:** Completed permitted review; no coverage gaps were recorded.",
+      "**Publication result:** `complete`",
+      "[Pull-request review](https://github.example/review/41)",
+      "[Workflow logs](https://github.example/actions/runs/99)",
+    ]) {
+      expect(body).toContain(phrase);
+    }
+  });
 });
 
 // Publication scenarios stay grouped because they share the same observable request sequence.
@@ -507,9 +544,55 @@ function publicationAdapterTests(): void {
     });
     await expect(
       publishReviewOutcome(transport, target, outcome("clean"), authorization),
-    ).rejects.toThrow("Refusing to publish");
+    ).rejects.toBeInstanceOf(PublicationRefusalError);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("GET");
+  });
+
+  // oxlint-disable-next-line vitest/expect-expect
+  it("classifies a freshness race before review creation as refused", async () => {
+    await expectRefusedBeforeReview({
+      currentHeads: [target.headSha, "3333333333333333333333333333333333333333"],
+    });
+  });
+
+  // oxlint-disable-next-line vitest/expect-expect
+  it("refuses publication when the pre-write freshness request fails", async () => {
+    await expectRefusedBeforeReview({ failPath: "/pulls/42" });
+  });
+
+  it("records review creation when GitHub returns an unusable review identity", async () => {
+    const { transport } = fakeTransport({ reviewResponse: {} });
+
+    await expect(
+      publishReviewOutcome(transport, target, outcome("findings"), authorization),
+    ).rejects.toMatchObject({
+      confirmedEffects: {
+        result: "incomplete",
+        headSha: target.headSha,
+        reviewCreated: true,
+        inlineCommentCount: 1,
+        unanchoredFindingCount: 0,
+      },
+    });
+  });
+
+  it("refuses an oversized unanchored review body before review creation", async () => {
+    const largeFinding = (suffix: string): MaterialFinding => ({
+      ...finding(null),
+      fingerprint: { ...findingFingerprint, value: `large-${suffix}` },
+      summary: `${suffix}-${"x".repeat(35 * 1024)}`,
+    });
+    const reviewOutcome = {
+      ...outcome("findings"),
+      materialFindings: [largeFinding("one"), largeFinding("two")],
+    } as ReviewOutcome;
+    const { requests, transport } = fakeTransport();
+
+    await expect(
+      publishReviewOutcome(transport, target, reviewOutcome, authorization),
+    ).rejects.toBeInstanceOf(PublicationRefusalError);
+    expect(requests.some((request) => request.path.endsWith("/reviews"))).toBe(false);
   });
 
   // oxlint-disable-next-line max-lines-per-function
@@ -565,14 +648,24 @@ function publicationAdapterTests(): void {
     expect(requests.some((request) => request.path.includes("/issues/comments"))).toBe(false);
   });
 
-  it("fails if the head changes during publication", async () => {
+  it("returns every confirmed effect when the head changes after review creation", async () => {
     const { requests, transport } = fakeTransport({
       existingSummary: true,
-      currentHeads: [target.headSha, "3333333333333333333333333333333333333333"],
+      currentHeads: [target.headSha, target.headSha, "3333333333333333333333333333333333333333"],
     });
-    await expect(
-      publishReviewOutcome(transport, target, outcome("findings"), authorization),
-    ).rejects.toThrow("stale Review outcome");
+
+    const publication = publishReviewOutcome(transport, target, outcome("findings"), authorization);
+    await expect(publication).rejects.toMatchObject({
+      confirmedEffects: {
+        result: "incomplete",
+        headSha: target.headSha,
+        reviewId: 41,
+        inlineCommentCount: 1,
+        unanchoredFindingCount: 0,
+      },
+    });
+    await expect(publication).rejects.toBeInstanceOf(IncompletePublicationError);
+    expect(requests.filter((request) => request.path.endsWith("/reviews"))).toHaveLength(1);
     expect(requests.some((request) => request.path.includes("/issues/comments"))).toBe(false);
   });
 

@@ -42,6 +42,7 @@ export interface ActionIo {
   readPolicy(revision: string, path: string): Promise<string | undefined>;
   setOutput(name: string, value: string): Promise<void>;
   writeJobSummary?(contents: string): Promise<void>;
+  workflowRunUrl?: string;
   listFindingDiscussionComments?(
     repository: string,
     pullRequestNumber: number,
@@ -114,6 +115,13 @@ export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
       const summaryPath = env.GITHUB_STEP_SUMMARY;
       if (summaryPath !== undefined) await appendFile(summaryPath, `${contents}\n`, "utf8");
     },
+    ...(env.GITHUB_SERVER_URL === undefined ||
+    env.GITHUB_REPOSITORY === undefined ||
+    env.GITHUB_RUN_ID === undefined
+      ? {}
+      : {
+          workflowRunUrl: `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`,
+        }),
     ...(transport === undefined
       ? {}
       : {
