@@ -7,7 +7,11 @@ import { afterEach, expect, it } from "vitest";
 import { publishActionOutcome } from "../src/action-publication.js";
 import { createActionIo, runAction } from "../src/action.js";
 import { actionExitCodeForOutcome } from "../src/action-readiness.js";
-import { IncompletePublicationError, PublicationRefusalError } from "../src/github-publication.js";
+import {
+  IncompletePublicationError,
+  PublicationRefusalError,
+  type PublicationAuthorization,
+} from "../src/github-publication.js";
 import {
   FileSystemReviewPersistenceStore,
   findingIdentityMarker,
@@ -141,6 +145,29 @@ const confirmedReviewEffects = {
   inlineCommentCount: 1,
   unanchoredFindingCount: 0,
 };
+
+function publicationRunRecord(
+  runId: string,
+  recordedAt: string,
+  headSha = reviewedPullRequest.headSha,
+) {
+  return {
+    runId,
+    recordedAt,
+    revision: { pullRequest: { ...reviewedPullRequest, headSha } },
+    trustClass: "trusted_same_repo_pull_request",
+  };
+}
+
+function publicationOutcome(runId: string) {
+  return {
+    type: "clean",
+    trust: trustedSameRepoTrust,
+    pullRequest: reviewedPullRequest,
+    materialFindings: [],
+    run: { runId },
+  } as never;
+}
 
 async function expectPersistedEffects(
   stateDirectory: string,
@@ -329,11 +356,14 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
         summaries.push(summary);
       },
       publishOutcome: async (target, outcome, authorization) => {
+        await authorization.claimAuthority?.();
         calls.push(target);
         expect(outcome.type).toBe("clean");
-        expect(authorization).toEqual({
+        expect(authorization).toMatchObject({
           sourceRunVerified: true,
           surfaces: ["pull_request_review"],
+          claimAuthority: expect.any(Function),
+          reserveEffect: expect.any(Function),
         });
         return {
           result: "complete",
@@ -375,6 +405,107 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
   );
 });
 
+// oxlint-disable-next-line max-lines-per-function
+it("refuses a stale run without overwriting the newest publication authority", async () => {
+  const effects = new Map<string, unknown>();
+  let publicationState: unknown;
+  const records = new Map([
+    ["run-new", publicationRunRecord("run-new", "2026-01-02T00:00:00.000Z")],
+    ["run-old", publicationRunRecord("run-old", "2026-01-01T00:00:00.000Z")],
+    ["run-alias", publicationRunRecord("different-run", "2026-01-03T00:00:00.000Z")],
+    [
+      "run-mismatch",
+      publicationRunRecord(
+        "run-mismatch",
+        "2026-01-03T00:00:00.000Z",
+        "3333333333333333333333333333333333333333",
+      ),
+    ],
+  ]);
+  const persistence = {
+    withTransaction: async (_key: unknown, operation: (transaction: never) => Promise<unknown>) =>
+      operation({
+        loadRunRecord: async (runId: string) => records.get(runId),
+        loadPublicationEffects: async (runId: string) => effects.get(runId),
+        savePublicationEffects: async (runId: string, value: unknown) => {
+          effects.set(runId, value);
+        },
+        loadPublicationState: async () => publicationState,
+        savePublicationState: async (value: unknown) => {
+          publicationState = value;
+        },
+      } as never),
+  };
+  const outputs = new Map<string, string>();
+  let publications = 0;
+  const io = {
+    ...capturingActionIo(outputs),
+    publishOutcome: async (
+      _target: unknown,
+      _outcome: unknown,
+      authorization: PublicationAuthorization,
+    ) => {
+      await authorization.claimAuthority?.();
+      publications += 1;
+      return {
+        result: "complete" as const,
+        headSha: reviewedPullRequest.headSha,
+        inlineCommentCount: 0,
+        unanchoredFindingCount: 0,
+      };
+    },
+  };
+  const pullRequest = {
+    number: reviewedPullRequest.number,
+    head: { sha: reviewedPullRequest.headSha },
+  } as never;
+
+  await publishActionOutcome(
+    io,
+    reviewedPullRequest.repository,
+    pullRequest,
+    publicationOutcome("run-new"),
+    [],
+    persistence as never,
+  );
+  await expect(
+    publishActionOutcome(
+      io,
+      reviewedPullRequest.repository,
+      pullRequest,
+      publicationOutcome("run-old"),
+      [],
+      persistence as never,
+    ),
+  ).rejects.toThrow("newer verified run");
+  await expect(
+    publishActionOutcome(
+      io,
+      reviewedPullRequest.repository,
+      pullRequest,
+      publicationOutcome("run-alias"),
+      [],
+      persistence as never,
+    ),
+  ).rejects.toThrow("does not match publication");
+  await expect(
+    publishActionOutcome(
+      io,
+      reviewedPullRequest.repository,
+      pullRequest,
+      publicationOutcome("run-mismatch"),
+      [],
+      persistence as never,
+    ),
+  ).rejects.toThrow("does not match publication");
+
+  expect(publications).toBe(1);
+  expect(publicationState).toMatchObject({
+    authority: { runId: "run-new", result: "complete" },
+  });
+  expect(effects.get("run-old")).toMatchObject({ result: "refused" });
+});
+
 it("maps non-clean Review outcomes to a failing workflow check", () => {
   const clean = { type: "clean", trust: trustedSameRepoTrust };
   expect(actionExitCodeForOutcome(clean as never)).toBe(0);
@@ -402,12 +533,18 @@ it("removes GITHUB_TOKEN from the engine environment while retaining a publisher
 
 async function publicationFailureOutputs(error: Error) {
   const outputs = new Map<string, string>();
+  const stateDirectory = await stateDirectories.create();
   await expect(
     runAction(
-      { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath },
+      {
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: eventPath,
+        INPUT_STATE_DIRECTORY: stateDirectory,
+      },
       {
         ...capturingActionIo(outputs),
-        publishOutcome: async () => {
+        publishOutcome: async (_target, _outcome, authorization) => {
+          await authorization.claimAuthority?.();
           throw error;
         },
       },
@@ -450,7 +587,10 @@ it("preserves confirmed effects when job-summary publication fails", async () =>
       {
         ...capturingActionIo(outputs),
         executeRole: async (request) => materialRoleResult(request),
-        publishOutcome: async () => confirmedEffects,
+        publishOutcome: async (_target, _outcome, authorization) => {
+          await authorization.claimAuthority?.();
+          return confirmedEffects;
+        },
         writeJobSummary: async () => {
           throw new Error("job summary unavailable");
         },
@@ -485,9 +625,17 @@ it("reports incomplete publication when confirmed-effect persistence fails", asy
     writeJobSummary: async (summary: string) => {
       summaries.push(summary);
     },
-    publishOutcome: async () => ({ ...confirmedReviewEffects, result: "complete" as const }),
+    publishOutcome: async (
+      _target: unknown,
+      _outcome: unknown,
+      authorization: PublicationAuthorization,
+    ) => {
+      await authorization.claimAuthority?.();
+      return { ...confirmedReviewEffects, result: "complete" as const };
+    },
   };
 
+  let persistenceTransactions = 0;
   await expect(
     publishActionOutcome(
       io,
@@ -499,8 +647,16 @@ it("reports incomplete publication when confirmed-effect persistence fails", asy
       outcome as never,
       [],
       {
-        withTransaction: async () => {
-          throw new Error("Finding ledger unavailable");
+        withTransaction: async (_key, operation) => {
+          persistenceTransactions += 1;
+          if (persistenceTransactions > 1) throw new Error("Finding ledger unavailable");
+          return operation({
+            loadRunRecord: async () => publicationRunRecord("run-1", "2026-01-01T00:00:00.000Z"),
+            loadPublicationEffects: async () => undefined,
+            savePublicationEffects: async () => undefined,
+            loadPublicationState: async () => undefined,
+            savePublicationState: async () => undefined,
+          } as never);
         },
       },
     ),
@@ -523,6 +679,7 @@ it("records confirmed effects when required publication is incomplete", async ()
     reason: "The pull-request head changed after review creation.",
   };
 
+  // jscpd:ignore-start
   await expect(
     runAction(
       {
@@ -533,12 +690,14 @@ it("records confirmed effects when required publication is incomplete", async ()
       {
         ...capturingActionIo(outputs),
         executeRole: async (request) => materialRoleResult(request),
-        publishOutcome: async () => {
+        publishOutcome: async (_target, _outcome, authorization) => {
+          await authorization.claimAuthority?.();
           throw new IncompletePublicationError(receipt.reason, receipt);
         },
       },
     ),
   ).rejects.toThrow(receipt.reason);
+  // jscpd:ignore-end
 
   expect(JSON.parse(outputs.get("publication") ?? "{}")).toEqual(receipt);
   const outcome = JSON.parse(outputs.get("outcome") ?? "{}") as { run?: { runId?: string } };

@@ -1,4 +1,4 @@
-/* oxlint-disable max-lines-per-function */
+/* oxlint-disable max-lines, max-lines-per-function */
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -99,6 +99,7 @@ describe("FileSystemReviewPersistenceStore", () => {
       await transaction.saveLedger(ledger());
       await transaction.saveRunRecord(runRecord("run-1"));
       await transaction.savePublicationEffects("run-1", { result: "complete" });
+      await transaction.savePublicationState({ version: 1, effectOwners: {} });
     });
     await store.withTransaction(key, async (transaction) => {
       expect(await transaction.loadLedger()).toEqual(ledger());
@@ -107,6 +108,7 @@ describe("FileSystemReviewPersistenceStore", () => {
         runId: "run-1",
       });
       expect(await transaction.loadPublicationEffects("run-1")).toEqual({ result: "complete" });
+      expect(await transaction.loadPublicationState()).toEqual({ version: 1, effectOwners: {} });
       await transaction.saveRunRecord(runRecord("run-1"));
     });
     await expect(
@@ -218,11 +220,13 @@ describe("GitReviewPersistenceStore", () => {
       await transaction.saveLedger(ledger());
       await transaction.saveRunRecord(runRecord("run-1"));
       await transaction.savePublicationEffects("run-1", { result: "complete" });
+      await transaction.savePublicationState({ version: 1, effectOwners: {} });
     });
     await store.withTransaction(key, async (transaction) => {
       expect(await transaction.loadLedger()).toEqual(ledger());
       expect(await transaction.loadRunRecord("run-1")).toMatchObject({ runId: "run-1" });
       expect(await transaction.loadPublicationEffects("run-1")).toEqual({ result: "complete" });
+      expect(await transaction.loadPublicationState()).toEqual({ version: 1, effectOwners: {} });
       await transaction.saveRunRecord(runRecord("run-1"));
     });
     await expect(
@@ -236,7 +240,84 @@ describe("GitReviewPersistenceStore", () => {
       "refs/diffowl/state/repositories/example/review-target/pull-requests/42/marker";
     expect(await git(["ls-remote", "origin", stateRef], checkout)).toContain(stateRef);
     expect(await git(["ls-remote", "origin", markerRef], checkout)).toContain(markerRef);
-  }, 15_000);
+  }, 30_000);
+
+  it("rereads and reconciles one Git conflict, then preserves both transitions", async () => {
+    const { remote, checkout } = await temporaryGitRepository();
+    const secondCheckout = join(await temporaryRoot(), "second-checkout");
+    await git(["clone", "--branch", "main", remote, secondCheckout], checkout);
+    const stores = [
+      new GitReviewPersistenceStore({ gitDirectory: checkout }),
+      new GitReviewPersistenceStore({ gitDirectory: secondCheckout }),
+    ];
+    const attempts = [0, 0];
+    let arrivals = 0;
+    let release: (() => void) | undefined;
+    const bothLoaded = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await Promise.all(
+      stores.map((store, index) =>
+        store.withTransaction(key, async (transaction) => {
+          attempts[index] = (attempts[index] ?? 0) + 1;
+          if (attempts[index] === 1) {
+            arrivals += 1;
+            if (arrivals === 2) release?.();
+            await bothLoaded;
+          }
+          await transaction.savePublicationEffects(`run-${index + 1}`, {
+            result: "complete",
+          });
+        }),
+      ),
+    );
+
+    expect(attempts).toContain(2);
+    await new GitReviewPersistenceStore({ gitDirectory: checkout }).withTransaction(
+      key,
+      async (transaction) => {
+        expect(await transaction.loadPublicationEffects("run-1")).toEqual({
+          result: "complete",
+        });
+        expect(await transaction.loadPublicationEffects("run-2")).toEqual({
+          result: "complete",
+        });
+      },
+    );
+  }, 30_000);
+
+  it("fails after a second Git conflict without discarding competing transitions", async () => {
+    const { remote, checkout } = await temporaryGitRepository();
+    const competingCheckout = join(await temporaryRoot(), "competing-checkout");
+    await git(["clone", "--branch", "main", remote, competingCheckout], checkout);
+    const targetStore = new GitReviewPersistenceStore({ gitDirectory: checkout });
+    const competingStore = new GitReviewPersistenceStore({ gitDirectory: competingCheckout });
+    let attempts = 0;
+
+    await expect(
+      targetStore.withTransaction(key, async (transaction) => {
+        attempts += 1;
+        await competingStore.withTransaction(key, async (competingTransaction) => {
+          await competingTransaction.savePublicationEffects(`competing-${attempts}`, {
+            result: "complete",
+          });
+        });
+        await transaction.savePublicationEffects("target", { result: "complete" });
+      }),
+    ).rejects.toThrow("Unable to advance");
+
+    expect(attempts).toBe(2);
+    await competingStore.withTransaction(key, async (transaction) => {
+      expect(await transaction.loadPublicationEffects("competing-1")).toEqual({
+        result: "complete",
+      });
+      expect(await transaction.loadPublicationEffects("competing-2")).toEqual({
+        result: "complete",
+      });
+      expect(await transaction.loadPublicationEffects("target")).toBeUndefined();
+    });
+  }, 30_000);
 
   it("refuses to recreate deleted Git state refs after prior state", async () => {
     const { remote, checkout } = await temporaryGitRepository();

@@ -1,3 +1,5 @@
+/* oxlint-disable max-lines */
+import { canonicalJsonHash } from "./canonical-json.js";
 import type { MaterialFinding } from "./review-engine.js";
 import {
   GITHUB_BODY_LIMIT,
@@ -47,6 +49,8 @@ export const REQUIRED_PUBLICATION_SURFACES: readonly PublicationSurface[] = ["pu
 export interface PublicationAuthorization {
   sourceRunVerified: boolean;
   surfaces: readonly PublicationSurface[];
+  claimAuthority?: () => Promise<void>;
+  reserveEffect?: (effectId: string) => Promise<"create" | "reconcile">;
 }
 export type PublicationResult = "complete" | "not_attempted" | "refused" | "incomplete";
 export interface PublicationReceipt {
@@ -55,12 +59,14 @@ export interface PublicationReceipt {
   reviewId?: number;
   reviewUrl?: string;
   reviewCreated?: boolean;
+  reviewEffectId?: string;
   inlineCommentCount: number;
   unanchoredFindingCount: number;
   reason?: string;
 }
 interface ReviewReceipt {
   id: number;
+  effectId: string;
   htmlUrl?: string;
 }
 type InlineFinding = MaterialFinding & { location: { path: string; line: number } };
@@ -103,35 +109,126 @@ function reviewBody(unanchored: MaterialFinding[]): string {
   return lines.join("\n");
 }
 
+function reviewEffectId(
+  target: PublicationTarget,
+  body: string,
+  comments: ReadonlyArray<{ path: string; line: number; side: string; body: string }>,
+): string {
+  return canonicalJsonHash({
+    version: 1,
+    surface: "pull_request_review",
+    headSha: target.headSha,
+    body,
+    comments: comments.map((comment) => ({ ...comment })),
+  });
+}
+
+function reviewEffectMarker(effectId: string): string {
+  return `<!-- diffowl-publication-effect:${effectId} -->`;
+}
+
+async function authenticatedLogin(request: GitHubTransport): Promise<string> {
+  const user = asRecord(await request({ method: "GET", path: "/user" }), "GitHub user response");
+  if (typeof user.login !== "string") throw new Error("GitHub user response had no login.");
+  return user.login;
+}
+
+async function findPublishedReview(
+  request: GitHubTransport,
+  target: PublicationTarget,
+  effectId: string,
+  expectedBody: string,
+): Promise<ReviewReceipt | undefined> {
+  const login = await authenticatedLogin(request);
+  for (let page = 1; ; page += 1) {
+    // GitHub review pagination is bounded by the first short page.
+    // oxlint-disable-next-line no-await-in-loop
+    const response = await request({
+      method: "GET",
+      path: `/repos/${target.repository}/pulls/${target.pullRequestNumber}/reviews?per_page=100&page=${page}`,
+    });
+    if (!Array.isArray(response)) throw new Error("GitHub reviews response was invalid.");
+    for (const value of response) {
+      const review = asRecord(value, "GitHub review response");
+      const author = asRecord(review.user, "GitHub review author");
+      if (
+        review.body !== expectedBody ||
+        review.commit_id !== target.headSha ||
+        author.login !== login
+      ) {
+        continue;
+      }
+      return {
+        id: numericId(review, "GitHub review response"),
+        effectId,
+        ...(typeof review.html_url === "string" ? { htmlUrl: review.html_url } : {}),
+      };
+    }
+    if (response.length < 100) return undefined;
+  }
+}
+
+// oxlint-disable-next-line complexity, max-lines-per-function
 async function publishReview(
   request: GitHubTransport,
   target: PublicationTarget,
   findings: InlineFinding[],
   unanchored: MaterialFinding[],
+  reserveEffect?: PublicationAuthorization["reserveEffect"],
 ): Promise<ReviewReceipt | undefined> {
   if (findings.length === 0 && unanchored.length === 0) return undefined;
-  const body = reviewBody(unanchored);
+  const visibleBody = reviewBody(unanchored);
   const comments = findings.map((finding) => ({
     path: finding.location.path,
     line: finding.location.line,
     side: "RIGHT",
     body: findingBody(finding),
   }));
+  const effectId = reviewEffectId(target, visibleBody, comments);
+  const body = `${reviewEffectMarker(effectId)}\n${visibleBody}`;
   if (
     Buffer.byteLength(body) > GITHUB_BODY_LIMIT ||
     comments.some((comment) => Buffer.byteLength(comment.body) > GITHUB_BODY_LIMIT)
   ) {
     throw new PublicationRefusalError();
   }
-  const response = await request({
-    method: "POST",
-    path: `/repos/${target.repository}/pulls/${target.pullRequestNumber}/reviews`,
-    body: { commit_id: target.headSha, event: "COMMENT", body, comments },
-  });
+  const reservation = await reserveEffect?.(effectId);
+  const existing = await findPublishedReview(request, target, effectId, body);
+  if (existing !== undefined) return existing;
+  if (reservation === "reconcile") {
+    const message = "A reserved pull-request review is not yet visible for reconciliation.";
+    throw new IncompletePublicationError(message, {
+      result: "incomplete",
+      headSha: target.headSha,
+      reviewEffectId: effectId,
+      inlineCommentCount: findings.length,
+      unanchoredFindingCount: unanchored.length,
+      reason: message,
+    });
+  }
+  let response: unknown;
+  try {
+    response = await request({
+      method: "POST",
+      path: `/repos/${target.repository}/pulls/${target.pullRequestNumber}/reviews`,
+      body: { commit_id: target.headSha, event: "COMMENT", body, comments },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GitHub review request failed.";
+    throw new IncompletePublicationError(message, {
+      result: "incomplete",
+      headSha: target.headSha,
+      reviewEffectId: effectId,
+      inlineCommentCount: findings.length,
+      unanchoredFindingCount: unanchored.length,
+      reason: message,
+    });
+  }
   try {
     const result = asRecord(response, "GitHub review response");
     return {
       id: numericId(result, "GitHub review response"),
+      effectId,
       ...(typeof result.html_url === "string" ? { htmlUrl: result.html_url } : {}),
     };
   } catch (error) {
@@ -140,6 +237,7 @@ async function publishReview(
       result: "incomplete",
       headSha: target.headSha,
       reviewCreated: true,
+      reviewEffectId: effectId,
       inlineCommentCount: findings.length,
       unanchoredFindingCount: unanchored.length,
       reason: message,
@@ -171,6 +269,7 @@ async function assertCurrentHead(
     throw new PublicationRefusalError();
 }
 
+// oxlint-disable-next-line complexity
 export async function publishReviewOutcome(
   request: GitHubTransport,
   target: PublicationTarget,
@@ -183,12 +282,19 @@ export async function publishReviewOutcome(
     authorization,
     (await readCurrentHead(request, target)) === target.headSha,
   );
+  await authorization?.claimAuthority?.();
   const active = materialFindings(validated).filter(isActiveFinding);
   const lines = changedLineKeys(target);
   const inline = active.filter((finding) => inlineFinding(finding, lines));
   const unanchored = active.filter((finding) => !inlineFinding(finding, lines));
   await assertCurrentHead(request, target);
-  const review = await publishReview(request, target, inline, unanchored);
+  const review = await publishReview(
+    request,
+    target,
+    inline,
+    unanchored,
+    authorization?.reserveEffect,
+  );
   try {
     await assertCurrentHead(request, target);
   } catch (error) {
@@ -198,6 +304,7 @@ export async function publishReviewOutcome(
       result: "incomplete",
       headSha: target.headSha,
       reviewId: review.id,
+      reviewEffectId: review.effectId,
       ...(review.htmlUrl === undefined ? {} : { reviewUrl: review.htmlUrl }),
       inlineCommentCount: inline.length,
       unanchoredFindingCount: unanchored.length,
@@ -207,7 +314,7 @@ export async function publishReviewOutcome(
   return {
     result: "complete",
     headSha: target.headSha,
-    ...(review === undefined ? {} : { reviewId: review.id }),
+    ...(review === undefined ? {} : { reviewId: review.id, reviewEffectId: review.effectId }),
     ...(review?.htmlUrl === undefined ? {} : { reviewUrl: review.htmlUrl }),
     inlineCommentCount: inline.length,
     unanchoredFindingCount: unanchored.length,

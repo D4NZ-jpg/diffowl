@@ -41,6 +41,13 @@ type IssueCommentPage = Array<{
   body: string;
   user: { login: string };
 }>;
+type ReviewPage = Array<{
+  id: number;
+  body: string;
+  commit_id: string;
+  user: { login: string };
+  html_url?: string;
+}>;
 
 const findingFingerprint: FindingFingerprint = {
   version: 1,
@@ -156,9 +163,13 @@ function fakeTransport(
     reviewComments?: IssueCommentPage;
     checkRuns?: number[];
     reviewResponse?: unknown;
+    reviews?: ReviewPage;
+    failAfterReview?: boolean;
+    beforeReviewPost?: () => Promise<void>;
   } = {},
 ) {
   const requests: GitHubRequest[] = [];
+  const reviews = options.reviews ?? [];
   const comments: IssueCommentPage = options.existingSummary
     ? [{ id: 31, body: SUMMARY_MARKER, user: { login: "github-actions[bot]" } }]
     : [{ id: 30, body: SUMMARY_MARKER, user: { login: "someone-else" } }];
@@ -166,7 +177,7 @@ function fakeTransport(
   const checkRuns = options.checkRuns ?? [];
   let seededPages = false;
   let headRead = 0;
-  // oxlint-disable-next-line complexity
+  // oxlint-disable-next-line complexity, max-lines-per-function
   const transport: GitHubTransport = async (request) => {
     requests.push(request);
     if (options.failPath !== undefined && request.path.endsWith(options.failPath)) {
@@ -185,8 +196,15 @@ function fakeTransport(
       const page = Number(new URL(request.path, "https://example.test").searchParams.get("page"));
       return reviewComments.slice((page - 1) * 100, page * 100);
     }
+    if (request.method === "GET" && request.path === "/user") {
+      return { login: "github-actions[bot]" };
+    }
     if (request.method === "GET" && request.path.includes("/check-runs")) {
       return { check_runs: checkRuns.map((id) => ({ id })) };
+    }
+    if (request.method === "GET" && request.path.includes("/reviews")) {
+      const page = Number(new URL(request.path, "https://example.test").searchParams.get("page"));
+      return reviews.slice((page - 1) * 100, page * 100);
     }
     if (request.method === "GET") {
       const page = Number(new URL(request.path, "https://example.test").searchParams.get("page"));
@@ -200,7 +218,23 @@ function fakeTransport(
       }
       return comments.slice((page - 1) * 100, page * 100);
     }
-    if (request.path.endsWith("/reviews")) return options.reviewResponse ?? { id: 41 };
+    if (request.path.endsWith("/reviews")) {
+      await options.beforeReviewPost?.();
+      const response = options.reviewResponse ?? { id: 41 };
+      const id =
+        typeof response === "object" && response !== null && "id" in response
+          ? Number(response.id)
+          : 41;
+      reviews.push({
+        id,
+        body: (request.body as { body: string }).body,
+        commit_id: target.headSha,
+        user: { login: "github-actions[bot]" },
+      });
+      if (options.failAfterReview === true)
+        throw new Error("connection lost after review creation");
+      return response;
+    }
     if (request.path.endsWith("/check-runs")) return { id: 42 };
     const patchedReviewCommentId = /\/pulls\/comments\/(\d+)$/u.exec(request.path)?.[1];
     if (patchedReviewCommentId !== undefined) {
@@ -225,7 +259,21 @@ function fakeTransport(
     });
     return { id: 43 };
   };
-  return { comments, requests, reviewComments, transport };
+  return { comments, requests, reviewComments, reviews, transport };
+}
+
+async function expectInterruptedReviewReconciled(
+  options: Parameters<typeof fakeTransport>[0],
+  expectedEffects: Record<string, unknown>,
+): Promise<void> {
+  const { requests, transport } = fakeTransport(options);
+  await expect(
+    publishReviewOutcome(transport, target, outcome("findings"), authorization),
+  ).rejects.toMatchObject({ confirmedEffects: expectedEffects });
+  await expect(
+    publishReviewOutcome(transport, target, outcome("findings"), authorization),
+  ).resolves.toMatchObject({ result: "complete", reviewId: 41 });
+  expect(requests.filter((request) => request.method === "POST")).toHaveLength(1);
 }
 
 async function expectRefusedBeforeReview(
@@ -436,10 +484,11 @@ function publicationAdapterTests(): void {
     const findingsOutcome = outcome("findings");
     const receipt = await publishReviewOutcome(transport, target, findingsOutcome, authorization);
 
-    expect(receipt).toEqual({
+    expect(receipt).toMatchObject({
       result: "complete",
       headSha: target.headSha,
       reviewId: 41,
+      reviewEffectId: expect.stringMatching(/^sha256:[\da-f]{64}$/u),
       inlineCommentCount: 1,
       unanchoredFindingCount: 0,
     });
@@ -538,13 +587,20 @@ function publicationAdapterTests(): void {
     expect(requests).toHaveLength(1);
   });
 
-  it("rejects a stale current head before any write", async () => {
+  it("rejects a stale current head before claiming publication authority", async () => {
     const { requests, transport } = fakeTransport({
       currentHead: "3333333333333333333333333333333333333333",
     });
+    let authorityClaims = 0;
     await expect(
-      publishReviewOutcome(transport, target, outcome("clean"), authorization),
+      publishReviewOutcome(transport, target, outcome("clean"), {
+        ...authorization,
+        claimAuthority: async () => {
+          authorityClaims += 1;
+        },
+      }),
     ).rejects.toBeInstanceOf(PublicationRefusalError);
+    expect(authorityClaims).toBe(0);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("GET");
   });
@@ -561,20 +617,94 @@ function publicationAdapterTests(): void {
     await expectRefusedBeforeReview({ failPath: "/pulls/42" });
   });
 
-  it("records review creation when GitHub returns an unusable review identity", async () => {
-    const { transport } = fakeTransport({ reviewResponse: {} });
+  // oxlint-disable-next-line vitest/expect-expect
+  it("reconciles a transport failure after review creation without a duplicate", async () => {
+    await expectInterruptedReviewReconciled(
+      { failAfterReview: true },
+      {
+        result: "incomplete",
+        reviewEffectId: expect.stringMatching(/^sha256:[\da-f]{64}$/u),
+      },
+    );
+  });
 
+  it("lets one reserved concurrent run create a review while the other only reconciles", async () => {
+    let reserved = false;
+    let releasePost: (() => void) | undefined;
+    const postReleased = new Promise<void>((resolve) => {
+      releasePost = resolve;
+    });
+    let firstReserved: (() => void) | undefined;
+    const reservationCreated = new Promise<void>((resolve) => {
+      firstReserved = resolve;
+    });
+    const { requests, transport } = fakeTransport({
+      beforeReviewPost: async () => postReleased,
+    });
+    const concurrentAuthorization = () => ({
+      ...authorization,
+      reserveEffect: async () => {
+        if (reserved) return "reconcile" as const;
+        reserved = true;
+        firstReserved?.();
+        return "create" as const;
+      },
+    });
+
+    const first = publishReviewOutcome(
+      transport,
+      target,
+      outcome("findings"),
+      concurrentAuthorization(),
+    );
+    await reservationCreated;
     await expect(
-      publishReviewOutcome(transport, target, outcome("findings"), authorization),
-    ).rejects.toMatchObject({
-      confirmedEffects: {
+      publishReviewOutcome(transport, target, outcome("findings"), concurrentAuthorization()),
+    ).rejects.toMatchObject({ confirmedEffects: { result: "incomplete" } });
+    releasePost?.();
+    await expect(first).resolves.toMatchObject({ result: "complete", reviewId: 41 });
+    expect(requests.filter((request) => request.method === "POST")).toHaveLength(1);
+  });
+
+  // oxlint-disable-next-line vitest/expect-expect
+  it("discovers an interrupted review by stable identity instead of creating a duplicate", async () => {
+    await expectInterruptedReviewReconciled(
+      { reviewResponse: {} },
+      {
         result: "incomplete",
         headSha: target.headSha,
         reviewCreated: true,
         inlineCommentCount: 1,
         unanchoredFindingCount: 0,
       },
-    });
+    );
+  });
+
+  it("does not reconcile a forged review author, body, or commit", async () => {
+    const forgeries: Array<(review: ReviewPage[number]) => void> = [
+      (review) => {
+        review.user.login = "attacker";
+      },
+      (review) => {
+        review.body += "\nforged";
+      },
+      (review) => {
+        review.commit_id = "3333333333333333333333333333333333333333";
+      },
+    ];
+    for (const forge of forgeries) {
+      const { requests, reviews, transport } = fakeTransport({ reviewResponse: {} });
+      // oxlint-disable-next-line no-await-in-loop
+      await expect(
+        publishReviewOutcome(transport, target, outcome("findings"), authorization),
+      ).rejects.toBeInstanceOf(IncompletePublicationError);
+      forge(reviews[0]!);
+      // oxlint-disable-next-line no-await-in-loop
+      await expect(
+        publishReviewOutcome(transport, target, outcome("findings"), authorization),
+      ).rejects.toBeInstanceOf(IncompletePublicationError);
+      expect(requests.filter((request) => request.method === "POST")).toHaveLength(2);
+    }
   });
 
   it("refuses an oversized unanchored review body before review creation", async () => {

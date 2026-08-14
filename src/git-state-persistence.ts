@@ -19,6 +19,7 @@ interface PersistenceManifest {
   ledger?: string | undefined;
   runs: Record<string, string>;
   publicationEffects: Record<string, string>;
+  publicationState?: string | undefined;
 }
 
 interface StateDocument {
@@ -131,7 +132,8 @@ function parseManifest(value: unknown): PersistenceManifest {
       (typeof record.publicationEffects !== "object" ||
         record.publicationEffects === null ||
         Array.isArray(record.publicationEffects))) ||
-    (record.ledger !== undefined && typeof record.ledger !== "string")
+    (record.ledger !== undefined && typeof record.ledger !== "string") ||
+    (record.publicationState !== undefined && typeof record.publicationState !== "string")
   ) {
     throw configurationFailure("The Finding ledger manifest has an invalid schema.");
   }
@@ -148,8 +150,9 @@ function parseManifest(value: unknown): PersistenceManifest {
     }
   }
   if (
-    typeof record.ledger === "string" &&
-    !/^objects\/[A-Za-z0-9._-]+\.json$/u.test(record.ledger)
+    [record.ledger, record.publicationState].some(
+      (path) => typeof path === "string" && !/^objects\/[A-Za-z0-9._-]+\.json$/u.test(path),
+    )
   ) {
     throw configurationFailure("The Finding ledger manifest has an invalid schema.");
   }
@@ -261,6 +264,7 @@ async function loadState(
   for (const path of new Set(
     [
       manifest.ledger,
+      manifest.publicationState,
       ...Object.values(manifest.runs),
       ...Object.values(manifest.publicationEffects),
     ].filter(Boolean) as string[],
@@ -279,6 +283,7 @@ class GitReviewPersistenceTransaction implements ReviewPersistenceTransaction {
   private stagedLedger: FindingLedger | undefined;
   private readonly stagedRuns = new Map<string, ReviewRunRecord>();
   private readonly stagedPublicationEffects = new Map<string, JsonValue>();
+  private stagedPublicationState: JsonValue | undefined;
 
   constructor(private readonly state: StateDocument) {}
 
@@ -348,13 +353,28 @@ class GitReviewPersistenceTransaction implements ReviewPersistenceTransaction {
     return value as JsonValue;
   }
 
+  async savePublicationState(state: JsonValue): Promise<void> {
+    this.stagedPublicationState = state;
+  }
+
+  async loadPublicationState(): Promise<JsonValue | undefined> {
+    if (this.stagedPublicationState !== undefined) return this.stagedPublicationState;
+    const path = this.state.manifest.publicationState;
+    if (path === undefined) return undefined;
+    const value = this.state.objects.get(path);
+    if (value === undefined)
+      throw configurationFailure("Persisted publication state is missing from Git state.");
+    return value as JsonValue;
+  }
+
   // jscpd:ignore-end
 
   materialize(): StateDocument | undefined {
     if (
       this.stagedLedger === undefined &&
       this.stagedRuns.size === 0 &&
-      this.stagedPublicationEffects.size === 0
+      this.stagedPublicationEffects.size === 0 &&
+      this.stagedPublicationState === undefined
     )
       return undefined;
     const generation = randomUUID();
@@ -381,6 +401,11 @@ class GitReviewPersistenceTransaction implements ReviewPersistenceTransaction {
       const path = `objects/publication-${generation}-${runId}.json`;
       next.objects.set(path, effects);
       next.manifest.publicationEffects[runId] = path;
+    }
+    if (this.stagedPublicationState !== undefined) {
+      const path = `objects/publication-state-${generation}.json`;
+      next.objects.set(path, this.stagedPublicationState);
+      next.manifest.publicationState = path;
     }
     return next;
   }
