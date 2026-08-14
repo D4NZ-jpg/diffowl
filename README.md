@@ -17,7 +17,7 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write
   checks: write
   pull-requests: write
   issues: write
@@ -31,8 +31,6 @@ jobs:
           fetch-depth: 0
       - id: review-owl
         uses: D4NZ-jpg/diffowl@main
-        with:
-          state-directory: ${{ github.workspace }}/.diffowl-state
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -41,7 +39,9 @@ jobs:
 
 The Action's `default` credential profile uses RunCell's `env` credential mode. Provider SDKs read their normal variables from GitHub Secrets. Embedded deployments may instead supply any RunCell `Credentials` configuration, including an explicit agent directory or shared `CredentialStore` for refreshable OAuth credentials.
 
-`state-directory` enables the engine-owned Finding ledger and versioned Review run records. The path is optional, but when configured it must be a trusted directory that survives separate Action process invocations. For persistence across workflow runs, self-hosted deployments must mount or otherwise preserve this directory; a GitHub-hosted workspace is ephemeral unless restored and saved with an external cache/artifact step. Do not place the state directory under pull-request-controlled content or publish it as a public artifact. The Action outputs the typed `outcome`, plus `run-id` and safe `run-metadata` when persistence succeeds. A corrupt or unwritable configured store produces a bounded non-clean failure rather than silently returning a clean result.
+On GitHub-hosted trusted same-repository pull-request runs, Review OWL stores the canonical Finding ledger and versioned Review run records in dedicated base-repository Git refs under `refs/diffowl/state/...`. The Action advances those refs without force; on a concurrent writer it rereads state, recomputes the persistence transition, and retries once. This path requires `contents: write`. Missing permissions, corrupt state, deleted refs, or apparent rewrites produce a configuration failure with guidance instead of falling back to comments, checks, artifacts, caches, variables, or ephemeral workspace files.
+
+`state-directory` remains the filesystem persistence option for the local CLI and explicit self-hosted execution. The path is optional, but when configured it must be a trusted directory that survives separate Action process invocations. For persistence across workflow runs, self-hosted deployments must mount or otherwise preserve this directory. Do not place the state directory under pull-request-controlled content or publish it as a public artifact. The Action outputs the typed `outcome`, plus `run-id` and safe `run-metadata` when persistence succeeds. A corrupt or unwritable configured store produces a bounded non-clean failure rather than silently returning a clean result.
 
 The Action reads `.diffowl.json` from the pull request's base commit. It never reads policy from the pull-request head or synthetic merge commit, so a pull request cannot weaken its own review policy. The `outcome` output contains the typed Review outcome as JSON, including its Trust class and effective capabilities.
 

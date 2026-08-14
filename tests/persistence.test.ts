@@ -1,4 +1,5 @@
 /* oxlint-disable max-lines-per-function */
+import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { reconcileFindingLedger } from "../src/finding-ledger.js";
+import { GitReviewPersistenceStore } from "../src/git-state-persistence.js";
 import { FileSystemReviewPersistenceStore } from "../src/persistence.js";
 import { createReviewRunRecord, type ReviewRunRecord } from "../src/review-run-record.js";
 import {
@@ -17,6 +19,30 @@ import {
 
 const temporaryDirectories: string[] = [];
 const key = { repository: reviewedPullRequest.repository, pullRequestNumber: 42 };
+
+function git(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { cwd, encoding: "utf8" }, (error, stdout, stderr) => {
+      if (error === null) resolve(stdout.trimEnd());
+      else reject(new Error(stderr.trim() || error.message));
+    });
+  });
+}
+
+async function temporaryGitRepository(): Promise<{ remote: string; checkout: string }> {
+  const root = await temporaryRoot();
+  const remote = join(root, "remote.git");
+  const checkout = join(root, "checkout");
+  await git(["init", "--bare", remote], root);
+  await git(["clone", remote, checkout], root);
+  await git(["config", "user.email", "review-owl@example.invalid"], checkout);
+  await git(["config", "user.name", "Review OWL"], checkout);
+  await writeFile(join(checkout, "README.md"), "# target\n");
+  await git(["add", "README.md"], checkout);
+  await git(["commit", "-m", "initial"], checkout);
+  await git(["push", "origin", "HEAD:main"], checkout);
+  return { remote, checkout };
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -178,3 +204,61 @@ describe("FileSystemReviewPersistenceStore", () => {
     );
   });
 });
+
+// jscpd:ignore-start
+describe("GitReviewPersistenceStore", () => {
+  it("persists ledgers and immutable run records through a dedicated Git ref", async () => {
+    const { checkout } = await temporaryGitRepository();
+    const store = new GitReviewPersistenceStore({ gitDirectory: checkout });
+
+    await store.withTransaction(key, async (transaction) => {
+      await transaction.saveLedger(ledger());
+      await transaction.saveRunRecord(runRecord("run-1"));
+    });
+    await store.withTransaction(key, async (transaction) => {
+      expect(await transaction.loadLedger()).toEqual(ledger());
+      expect(await transaction.loadRunRecord("run-1")).toMatchObject({ runId: "run-1" });
+      await transaction.saveRunRecord(runRecord("run-1"));
+    });
+    await expect(
+      store.withTransaction(key, async (transaction) => {
+        await transaction.saveRunRecord({ ...runRecord("run-1"), engineVersion: "changed" });
+      }),
+    ).rejects.toThrow("immutable");
+
+    const stateRef = "refs/diffowl/state/repositories/example/review-target/pull-requests/42/state";
+    const markerRef =
+      "refs/diffowl/state/repositories/example/review-target/pull-requests/42/marker";
+    expect(await git(["ls-remote", "origin", stateRef], checkout)).toContain(stateRef);
+    expect(await git(["ls-remote", "origin", markerRef], checkout)).toContain(markerRef);
+  }, 15_000);
+
+  it("refuses to recreate deleted Git state refs after prior state", async () => {
+    const { checkout } = await temporaryGitRepository();
+    const store = new GitReviewPersistenceStore({ gitDirectory: checkout });
+    await store.withTransaction(key, async (transaction) => transaction.saveLedger(ledger()));
+
+    const stateRef = "refs/diffowl/state/repositories/example/review-target/pull-requests/42/state";
+    const markerRef =
+      "refs/diffowl/state/repositories/example/review-target/pull-requests/42/marker";
+    await git(["push", "origin", `:${stateRef}`, `:${markerRef}`], checkout);
+
+    await expect(
+      store.withTransaction(key, async (transaction) => transaction.saveLedger(ledger("run-2"))),
+    ).rejects.toThrow("deleted after prior state");
+  }, 15_000);
+
+  it("reports partial Git state ref deletion as configuration failure", async () => {
+    const { checkout } = await temporaryGitRepository();
+    const store = new GitReviewPersistenceStore({ gitDirectory: checkout });
+    await store.withTransaction(key, async (transaction) => transaction.saveLedger(ledger()));
+
+    const stateRef = "refs/diffowl/state/repositories/example/review-target/pull-requests/42/state";
+    await git(["push", "origin", `:${stateRef}`], checkout);
+
+    await expect(
+      store.withTransaction(key, async (transaction) => transaction.saveLedger(ledger("run-2"))),
+    ).rejects.toThrow("partial Diffowl state refs");
+  }, 15_000);
+});
+// jscpd:ignore-end

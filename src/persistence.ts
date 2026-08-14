@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines */
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
@@ -23,12 +24,15 @@ export interface ReviewPersistenceTransaction {
   saveLedger(ledger: FindingLedger): Promise<void>;
   saveRunRecord(record: ReviewRunRecord): Promise<void>;
   loadRunRecord(runId: string): Promise<ReviewRunRecord | undefined>;
+  savePublicationEffects(runId: string, effects: JsonValue): Promise<void>;
+  loadPublicationEffects(runId: string): Promise<JsonValue | undefined>;
 }
 
 interface PersistenceManifest {
   version: 1;
   ledger?: string | undefined;
   runs: Record<string, string>;
+  publicationEffects: Record<string, string>;
 }
 
 function assertSafeSegment(value: string, noun: string): void {
@@ -99,21 +103,26 @@ function parseManifest(value: unknown): PersistenceManifest {
     typeof record.runs !== "object" ||
     record.runs === null ||
     Array.isArray(record.runs) ||
+    (record.publicationEffects !== undefined &&
+      (typeof record.publicationEffects !== "object" ||
+        record.publicationEffects === null ||
+        Array.isArray(record.publicationEffects))) ||
     (record.ledger !== undefined && typeof record.ledger !== "string")
   ) {
     throw new Error("Persistence manifest is invalid.");
   }
   const runs = record.runs as Record<string, unknown>;
-  if (
-    !Object.entries(runs).every(([runId, path]) => {
+  const publicationEffects = (record.publicationEffects ?? {}) as Record<string, string>;
+  const validObjectMap = (entries: [string, unknown][]) =>
+    entries.every(([runId, path]) => {
       try {
         assertSafeRunId(runId);
       } catch {
         return false;
       }
       return typeof path === "string" && /^objects\/[A-Za-z0-9._-]+\.json$/u.test(path);
-    })
-  )
+    });
+  if (!validObjectMap(Object.entries(runs)) || !validObjectMap(Object.entries(publicationEffects)))
     throw new Error("Persistence manifest is invalid.");
   if (
     typeof record.ledger === "string" &&
@@ -121,12 +130,14 @@ function parseManifest(value: unknown): PersistenceManifest {
   ) {
     throw new Error("Persistence manifest is invalid.");
   }
-  return value as PersistenceManifest;
+  return { ...(value as PersistenceManifest), publicationEffects };
 }
 
 async function loadManifest(directory: string): Promise<PersistenceManifest> {
   const value = await readJson(join(directory, "manifest.json"));
-  return value === undefined ? { version: 1, runs: {} } : parseManifest(value);
+  return value === undefined
+    ? { version: 1, runs: {}, publicationEffects: {} }
+    : parseManifest(value);
 }
 
 async function wait(ms: number): Promise<void> {
@@ -228,6 +239,7 @@ async function releaseLock(lockPath: string, owner: LockOwner): Promise<void> {
 class FileSystemReviewPersistenceTransaction implements ReviewPersistenceTransaction {
   private stagedLedger: FindingLedger | undefined;
   private readonly stagedRuns = new Map<string, ReviewRunRecord>();
+  private readonly stagedPublicationEffects = new Map<string, JsonValue>();
 
   constructor(
     private readonly directory: string,
@@ -271,10 +283,36 @@ class FileSystemReviewPersistenceTransaction implements ReviewPersistenceTransac
     return parseReviewRunRecord(value);
   }
 
+  async savePublicationEffects(runId: string, effects: JsonValue): Promise<void> {
+    assertSafeRunId(runId);
+    this.stagedPublicationEffects.set(runId, effects);
+  }
+
+  async loadPublicationEffects(runId: string): Promise<JsonValue | undefined> {
+    assertSafeRunId(runId);
+    const staged = this.stagedPublicationEffects.get(runId);
+    if (staged !== undefined) return staged;
+    const path = this.manifest.publicationEffects[runId];
+    if (path === undefined) return undefined;
+    const value = await readJson(safeResolve(this.directory, path));
+    if (value === undefined)
+      throw new Error(`Persisted publication effects "${runId}" are missing.`);
+    return value as JsonValue;
+  }
+
   async commit(): Promise<void> {
-    if (this.stagedLedger === undefined && this.stagedRuns.size === 0) return;
+    if (
+      this.stagedLedger === undefined &&
+      this.stagedRuns.size === 0 &&
+      this.stagedPublicationEffects.size === 0
+    )
+      return;
     const generation = randomUUID();
-    const next: PersistenceManifest = { ...this.manifest, runs: { ...this.manifest.runs } };
+    const next: PersistenceManifest = {
+      ...this.manifest,
+      runs: { ...this.manifest.runs },
+      publicationEffects: { ...this.manifest.publicationEffects },
+    };
     if (this.stagedLedger !== undefined) {
       const path = `objects/ledger-${generation}.json`;
       await atomicWriteJson(safeResolve(this.directory, path), this.stagedLedger);
@@ -285,6 +323,12 @@ class FileSystemReviewPersistenceTransaction implements ReviewPersistenceTransac
       // oxlint-disable-next-line no-await-in-loop
       await atomicWriteJson(safeResolve(this.directory, path), record);
       next.runs[runId] = path;
+    }
+    for (const [runId, effects] of this.stagedPublicationEffects) {
+      const path = `objects/publication-${generation}-${runId}.json`;
+      // oxlint-disable-next-line no-await-in-loop
+      await atomicWriteJson(safeResolve(this.directory, path), effects);
+      next.publicationEffects[runId] = path;
     }
     await atomicWriteJson(join(this.directory, "manifest.json"), next);
   }

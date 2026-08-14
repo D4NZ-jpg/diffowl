@@ -21,6 +21,7 @@ import {
 class MemoryPersistence implements ReviewPersistenceStore {
   ledger?: FindingLedger;
   records: ReviewRunRecord[] = [];
+  publicationEffects = new Map<string, unknown>();
 
   async withTransaction<T>(
     _key: { repository: string; pullRequestNumber: number },
@@ -35,6 +36,10 @@ class MemoryPersistence implements ReviewPersistenceStore {
         this.records.push(record);
       },
       loadRunRecord: async (runId) => this.records.find((record) => record.runId === runId),
+      savePublicationEffects: async (runId, effects) => {
+        this.publicationEffects.set(runId, effects);
+      },
+      loadPublicationEffects: async (runId) => this.publicationEffects.get(runId) as never,
     };
     return operation(transaction);
   }

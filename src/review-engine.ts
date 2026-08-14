@@ -147,6 +147,7 @@ export type {
   FindingDiscussionComment,
   FindingDiscussionEffects,
 } from "./finding-discussion.js";
+export { GitReviewPersistenceStore } from "./git-state-persistence.js";
 export { FileSystemReviewPersistenceStore } from "./persistence.js";
 export type {
   PullRequestPersistenceKey,
@@ -337,7 +338,15 @@ function ledgerTransitions(previousLedger: FindingLedger | undefined, ledger: Fi
   }));
 }
 
-function persistenceFailureOutcome(input: PullRequestInput, outcome: ReviewOutcome): ReviewOutcome {
+function persistenceFailureOutcome(
+  input: PullRequestInput,
+  outcome: ReviewOutcome,
+  error?: unknown,
+): ReviewOutcome {
+  const detail = error instanceof Error ? error.message : "";
+  if (detail.startsWith("GitHub Finding state is not configured correctly:")) {
+    return configurationFailure(input, detail);
+  }
   if ("policy" in outcome) {
     return {
       type: "internal_failure",
@@ -425,8 +434,8 @@ async function persistOutcome(
         },
       };
     });
-  } catch {
-    return persistenceFailureOutcome(input, outcome);
+  } catch (error) {
+    return persistenceFailureOutcome(input, outcome, error);
   }
 }
 

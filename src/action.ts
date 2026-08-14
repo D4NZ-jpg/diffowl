@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
 import { type GitHubPullRequestEvent, isPullRequestEvent } from "./action-event.js";
+import type { JsonValue } from "./canonical-json.js";
 import { addedLinesFromDiff } from "./github-diff.js";
 import {
   REQUIRED_PUBLICATION_SURFACES,
@@ -25,6 +26,8 @@ import {
   type RoleExecutionResult,
   type VerificationAdapter,
   FileSystemReviewPersistenceStore,
+  GitReviewPersistenceStore,
+  type ReviewPersistenceStore,
   runReview,
   unavailableVerificationAdapter,
 } from "./review-engine.js";
@@ -141,13 +144,28 @@ function actionVerificationAdapter(
     : unavailableVerificationAdapter;
 }
 
+function actionPersistence(
+  env: NodeJS.ProcessEnv,
+  trust: ReturnType<typeof classifyTrust>,
+): ReviewPersistenceStore | undefined {
+  const stateDirectory = (env["INPUT_STATE-DIRECTORY"] ?? env.INPUT_STATE_DIRECTORY)?.trim();
+  const githubHostedEligible =
+    env.GITHUB_ACTIONS === "true" &&
+    env.RUNNER_ENVIRONMENT === "github-hosted" &&
+    trust.class === "trusted_same_repo_pull_request";
+  if (githubHostedEligible) return new GitReviewPersistenceStore();
+  return stateDirectory === undefined || stateDirectory === ""
+    ? undefined
+    : new FileSystemReviewPersistenceStore(stateDirectory);
+}
+
 async function reviewDependencies(
   env: NodeJS.ProcessEnv,
   io: ActionIo,
   repository: string,
   pullRequest: GitHubPullRequestEvent["pull_request"],
+  persistence: ReviewPersistenceStore | undefined,
 ) {
-  const stateDirectory = (env["INPUT_STATE-DIRECTORY"] ?? env.INPUT_STATE_DIRECTORY)?.trim();
   const effects = recognizeFindingDiscussionCommands(
     (await io.listFindingDiscussionComments?.(repository, pullRequest.number)) ?? [],
     { authorLogins: pullRequest.user?.login === undefined ? [] : [pullRequest.user.login] },
@@ -156,10 +174,7 @@ async function reviewDependencies(
     credentialProfiles: io.credentialProfiles ?? { default: { type: "env" as const } },
     executeRole: io.executeRole,
     verificationAdapter: actionVerificationAdapter(env, io.verificationAdapter),
-    persistence:
-      stateDirectory === undefined || stateDirectory === ""
-        ? undefined
-        : new FileSystemReviewPersistenceStore(stateDirectory),
+    persistence,
     findingDispositions: effects.dispositions,
     resolvedFingerprints: effects.resolvedFingerprints,
     reassessedFingerprints: effects.reassessedFingerprints,
@@ -194,6 +209,7 @@ async function publishActionOutcome(
   pullRequest: GitHubPullRequestEvent["pull_request"],
   outcome: ReviewOutcome,
   changedLines: PublicationTarget["changedLines"],
+  persistence: ReviewPersistenceStore | undefined,
 ): Promise<void> {
   await setReviewOutputs(io, outcome);
   if (io.publishOutcome === undefined || outcome.trust.class !== "trusted_same_repo_pull_request") {
@@ -211,6 +227,13 @@ async function publishActionOutcome(
       { sourceRunVerified: true, surfaces: REQUIRED_PUBLICATION_SURFACES },
     );
     await io.setOutput("publication", JSON.stringify(receipt));
+    if (outcome.run !== undefined) {
+      await persistence?.withTransaction(
+        { repository, pullRequestNumber: pullRequest.number },
+        async (transaction) =>
+          transaction.savePublicationEffects(outcome.run!.runId, receipt as unknown as JsonValue),
+      );
+    }
   } catch (error) {
     await setReviewOutputs(io, publicationFailureOutcome(outcome, error));
     throw error;
@@ -259,6 +282,7 @@ export async function runAction(
     actor: pullRequest.user?.login,
   });
 
+  const persistence = actionPersistence(env, trust);
   const diff = await io.readDiff(pullRequest.base.sha, pullRequest.head.sha);
   const policyContents = await io.readPolicy(pullRequest.base.sha, PROJECT_POLICY_PATH);
   const outcome = await runReview(
@@ -278,7 +302,7 @@ export async function runAction(
         contents: policyContents,
       },
     },
-    await reviewDependencies(env, io, repository.full_name, pullRequest),
+    await reviewDependencies(env, io, repository.full_name, pullRequest, persistence),
   );
 
   await publishActionOutcome(
@@ -287,6 +311,7 @@ export async function runAction(
     pullRequest,
     outcome,
     addedLinesFromDiff(diff),
+    persistence,
   );
   return outcome;
 }

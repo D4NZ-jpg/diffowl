@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
 import { createActionIo, runAction } from "../src/action.js";
-import { findingIdentityMarker, type RoleExecutionRequest } from "../src/review-engine.js";
+import {
+  FileSystemReviewPersistenceStore,
+  findingIdentityMarker,
+  type RoleExecutionRequest,
+} from "../src/review-engine.js";
 import { persistedRunCount, temporaryStateDirectories } from "./persistence-fixtures.js";
 import {
   completedReviewOutcome,
@@ -277,11 +281,16 @@ it("applies author Finding discussion replies from the Action adapter", async ()
   ]);
 });
 
-it("publishes and reports adapter-owned receipts when a publisher is injected", async () => {
+it("publishes, reports, and persists adapter-owned receipts when a publisher is injected", async () => {
+  const stateDirectory = await stateDirectories.create();
   const outputs = new Map<string, string>();
   const calls: Array<{ repository: string; pullRequestNumber: number; headSha: string }> = [];
   const result = await runAction(
-    { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath },
+    {
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+      INPUT_STATE_DIRECTORY: stateDirectory,
+    },
     {
       ...capturingActionIo(outputs),
       publishOutcome: async (target, outcome, authorization) => {
@@ -311,13 +320,22 @@ it("publishes and reports adapter-owned receipts when a publisher is injected", 
     },
   ]);
   expect(JSON.parse(outputs.get("outcome") ?? "")).toEqual(result);
-  expect(JSON.parse(outputs.get("publication") ?? "")).toEqual({
+  const receipt = {
     headSha: reviewedPullRequest.headSha,
     checkRunId: 1,
     summaryCommentId: 2,
     inlineCommentCount: 0,
     annotationCount: 0,
-  });
+  };
+  expect(JSON.parse(outputs.get("publication") ?? "")).toEqual(receipt);
+  await new FileSystemReviewPersistenceStore(stateDirectory).withTransaction(
+    { repository: reviewedPullRequest.repository, pullRequestNumber: reviewedPullRequest.number },
+    async (transaction) => {
+      expect(await transaction.loadPublicationEffects(result.run?.runId ?? "missing")).toEqual(
+        receipt,
+      );
+    },
+  );
 });
 
 it("removes GITHUB_TOKEN from the engine environment while retaining a publisher", () => {
