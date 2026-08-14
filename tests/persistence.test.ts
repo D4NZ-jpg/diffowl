@@ -98,6 +98,7 @@ describe("FileSystemReviewPersistenceStore", () => {
     await store.withTransaction(key, async (transaction) => {
       await transaction.saveLedger(ledger());
       await transaction.saveRunRecord(runRecord("run-1"));
+      await transaction.savePublicationEffects("run-1", { result: "complete" });
     });
     await store.withTransaction(key, async (transaction) => {
       expect(await transaction.loadLedger()).toEqual(ledger());
@@ -105,6 +106,7 @@ describe("FileSystemReviewPersistenceStore", () => {
         version: 1,
         runId: "run-1",
       });
+      expect(await transaction.loadPublicationEffects("run-1")).toEqual({ result: "complete" });
       await transaction.saveRunRecord(runRecord("run-1"));
     });
     await expect(
@@ -211,13 +213,16 @@ describe("GitReviewPersistenceStore", () => {
     const { checkout } = await temporaryGitRepository();
     const store = new GitReviewPersistenceStore({ gitDirectory: checkout });
 
+    await store.prepare(key);
     await store.withTransaction(key, async (transaction) => {
       await transaction.saveLedger(ledger());
       await transaction.saveRunRecord(runRecord("run-1"));
+      await transaction.savePublicationEffects("run-1", { result: "complete" });
     });
     await store.withTransaction(key, async (transaction) => {
       expect(await transaction.loadLedger()).toEqual(ledger());
       expect(await transaction.loadRunRecord("run-1")).toMatchObject({ runId: "run-1" });
+      expect(await transaction.loadPublicationEffects("run-1")).toEqual({ result: "complete" });
       await transaction.saveRunRecord(runRecord("run-1"));
     });
     await expect(
@@ -234,7 +239,7 @@ describe("GitReviewPersistenceStore", () => {
   }, 15_000);
 
   it("refuses to recreate deleted Git state refs after prior state", async () => {
-    const { checkout } = await temporaryGitRepository();
+    const { remote, checkout } = await temporaryGitRepository();
     const store = new GitReviewPersistenceStore({ gitDirectory: checkout });
     await store.withTransaction(key, async (transaction) => transaction.saveLedger(ledger()));
 
@@ -246,6 +251,15 @@ describe("GitReviewPersistenceStore", () => {
     await expect(
       store.withTransaction(key, async (transaction) => transaction.saveLedger(ledger("run-2"))),
     ).rejects.toThrow("deleted after prior state");
+
+    const freshCheckout = join(await temporaryRoot(), "fresh-checkout");
+    await git(["clone", remote, freshCheckout], checkout);
+    await expect(
+      new GitReviewPersistenceStore({ gitDirectory: freshCheckout }).withTransaction(
+        key,
+        async (transaction) => transaction.saveLedger(ledger("run-2")),
+      ),
+    ).rejects.toThrow("prior Diffowl state marker exists");
   }, 15_000);
 
   it("reports partial Git state ref deletion as configuration failure", async () => {

@@ -13,6 +13,7 @@ export interface PullRequestPersistenceKey {
 }
 
 export interface ReviewPersistenceStore {
+  prepare?(key: PullRequestPersistenceKey): Promise<void>;
   withTransaction<T>(
     key: PullRequestPersistenceKey,
     operation: (transaction: ReviewPersistenceTransaction) => Promise<T>,
@@ -233,7 +234,9 @@ async function releaseLock(lockPath: string, owner: LockOwner): Promise<void> {
   if (current === null || current.token !== owner.token || current.pid !== owner.pid) {
     throw new Error("Persistence lock ownership was lost.");
   }
-  await rm(lockPath, { recursive: true });
+  const releasedPath = `${lockPath}.released.${owner.token}`;
+  await rename(lockPath, releasedPath);
+  await rm(releasedPath, { recursive: true, force: true });
 }
 
 class FileSystemReviewPersistenceTransaction implements ReviewPersistenceTransaction {

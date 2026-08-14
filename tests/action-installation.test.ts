@@ -25,6 +25,26 @@ async function git(repository: string, ...args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
+async function actionStdout(repository: string, env: NodeJS.ProcessEnv): Promise<string> {
+  try {
+    const result = await exec("node", [join(projectRoot, "dist/action/index.js")], {
+      cwd: repository,
+      env,
+    });
+    return result.stdout;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "stdout" in error &&
+      typeof (error as { stdout: unknown }).stdout === "string"
+    ) {
+      return (error as { stdout: string }).stdout;
+    }
+    throw error;
+  }
+}
+
 async function createRepresentativeRepository(): Promise<{
   repository: string;
   baseSha: string;
@@ -112,12 +132,12 @@ describe("installable Review OWL Action", () => {
       OPENAI_API_KEY: "test-openai-secret",
       ANTHROPIC_API_KEY: "test-anthropic-secret",
     };
-    const result = await exec("node", [join(projectRoot, "dist/action/index.js")], {
-      cwd: repository,
-      env: { ...actionEnvironment, GITHUB_TOKEN: undefined },
+    const stdout = await actionStdout(repository, {
+      ...actionEnvironment,
+      GITHUB_TOKEN: undefined,
     });
 
-    const outcome = JSON.parse(result.stdout);
+    const outcome = JSON.parse(stdout);
     expect(outcome).toMatchObject({
       type: "provider_failure",
       reason: "Provider execution failed for the reviewer role.",
@@ -144,9 +164,9 @@ describe("installable Review OWL Action", () => {
     expect(output).toContain(`run-id=${outcome.run.runId}\n`);
     expect(output).toContain(`run-metadata=${JSON.stringify(outcome.run)}\n`);
 
-    await exec("node", [join(projectRoot, "dist/action/index.js")], {
-      cwd: repository,
-      env: { ...actionEnvironment, GITHUB_OUTPUT: join(repository, "second-action-output") },
+    await actionStdout(repository, {
+      ...actionEnvironment,
+      GITHUB_OUTPUT: join(repository, "second-action-output"),
     });
     const manifest = JSON.parse(
       await readFile(

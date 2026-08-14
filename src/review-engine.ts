@@ -490,6 +490,19 @@ export async function runReview(
     trust: input.trust,
     policy: { source: input.policy.source, effective: result.policy },
   };
+  if (dependencies.persistence?.prepare !== undefined) {
+    try {
+      await dependencies.persistence.prepare({
+        repository: input.repository,
+        pullRequestNumber: input.number,
+      });
+    } catch (error) {
+      return configurationFailure(
+        input,
+        error instanceof Error ? error.message : "Review persistence is not available.",
+      );
+    }
+  }
   const providerCredentialsAllowed =
     input.trust.capabilities.secrets === "provider_credentials_only" ||
     input.trust.capabilities.secrets === "local_user_authorized";

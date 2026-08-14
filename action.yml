@@ -8,9 +8,9 @@ outputs:
   outcome:
     description: The typed Review outcome as JSON.
   run-id:
-    description: The persisted Review run identifier, when state-directory is configured.
+    description: The persisted Review run identifier, when durable state is configured.
   run-metadata:
-    description: Safe persisted Review run metadata as JSON, when state-directory is configured.
+    description: Safe persisted Review run metadata as JSON, when durable state is configured.
   publication:
     description: Adapter-owned GitHub publication result and receipts as JSON.
 runs:

@@ -32,6 +32,11 @@ interface GitStateMarker {
   stateRef: string;
 }
 
+interface GitStateIndex {
+  version: 1;
+  initializedPullRequests: string[];
+}
+
 export interface GitReviewPersistenceOptions {
   remote?: string | undefined;
   refPrefix?: string | undefined;
@@ -83,10 +88,7 @@ function assertSafeRunId(value: string): void {
   assertSafeSegment(value, "Run id");
 }
 
-function refsFor(
-  key: PullRequestPersistenceKey,
-  prefix: string,
-): { state: string; marker: string } {
+function normalizedPersistenceKey(key: PullRequestPersistenceKey): string {
   const parts = key.repository.split("/");
   if (parts.length !== 2) throw configurationFailure("Repository key must use owner/name form.");
   for (const [index, part] of parts.entries())
@@ -94,8 +96,23 @@ function refsFor(
   if (!Number.isInteger(key.pullRequestNumber) || key.pullRequestNumber <= 0) {
     throw configurationFailure("Pull request number must be a positive integer.");
   }
-  const base = `${prefix}/repositories/${parts[0]}/${parts[1]}/pull-requests/${key.pullRequestNumber}`;
-  return { state: `${base}/state`, marker: `${base}/marker` };
+  return `${parts[0]}/${parts[1]}#${key.pullRequestNumber}`;
+}
+
+function refsFor(
+  key: PullRequestPersistenceKey,
+  prefix: string,
+): { state: string; marker: string; index: string; key: string } {
+  const normalized = normalizedPersistenceKey(key);
+  const [repository, pullRequestNumber] = normalized.split("#");
+  const [owner, name] = repository!.split("/");
+  const base = `${prefix}/repositories/${owner}/${name}/pull-requests/${pullRequestNumber}`;
+  return {
+    state: `${base}/state`,
+    marker: `${base}/marker`,
+    index: `${prefix}/marker`,
+    key: normalized,
+  };
 }
 
 // jscpd:ignore-start
@@ -155,6 +172,31 @@ function parseMarker(value: unknown, stateRef: string): GitStateMarker {
   return value as GitStateMarker;
 }
 
+function parseIndex(value: unknown): GitStateIndex {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    (value as Record<string, unknown>).version !== 1 ||
+    !Array.isArray((value as Record<string, unknown>).initializedPullRequests) ||
+    !(value as GitStateIndex).initializedPullRequests.every(
+      (entry) =>
+        typeof entry === "string" && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#[1-9][0-9]*$/u.test(entry),
+    )
+  ) {
+    throw configurationFailure(
+      "The Diffowl state marker index is invalid. Restore the base-repository Diffowl state refs before rerunning.",
+    );
+  }
+  return value as GitStateIndex;
+}
+
+async function loadIndex(indexRef: string, gitDirectory: string): Promise<GitStateIndex> {
+  const tip = await optionalRef(indexRef, gitDirectory);
+  if (tip === undefined) return { version: 1, initializedPullRequests: [] };
+  return parseIndex(await optionalJson(indexRef, "pull-requests.json", gitDirectory));
+}
+
 async function optionalRef(ref: string, gitDirectory: string): Promise<string | undefined> {
   try {
     return await execGit(["rev-parse", "--verify", `${ref}^{commit}`], gitDirectory);
@@ -182,7 +224,7 @@ async function optionalJson(
 }
 
 async function loadState(
-  refs: { state: string; marker: string },
+  refs: { state: string; marker: string; index: string; key: string },
   gitDirectory: string,
 ): Promise<StateDocument> {
   const [stateTip, markerTip] = await Promise.all([
@@ -190,7 +232,8 @@ async function loadState(
     optionalRef(refs.marker, gitDirectory),
   ]);
   if (stateTip === undefined) {
-    if (markerTip !== undefined) {
+    const index = await loadIndex(refs.index, gitDirectory);
+    if (markerTip !== undefined || index.initializedPullRequests.includes(refs.key)) {
       throw configurationFailure(
         "The Finding state ref is missing even though a prior Diffowl state marker exists. Restore the ref instead of falling back to comments, checks, artifacts, caches, or variables.",
       );
@@ -394,6 +437,42 @@ async function commitState(
   }
 }
 
+async function commitIndex(
+  refs: { index: string; key: string },
+  currentTip: string | undefined,
+  index: GitStateIndex,
+  gitDirectory: string,
+): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "diffowl-git-state-index-"));
+  try {
+    const entries = new Set(index.initializedPullRequests);
+    entries.add(refs.key);
+    const next: GitStateIndex = {
+      version: 1,
+      // oxlint-disable-next-line unicorn/no-array-sort
+      initializedPullRequests: [...entries].sort(),
+    };
+    const indexFile = join(directory, "pull-requests.json");
+    await writeFile(indexFile, `${JSON.stringify(next, undefined, 2)}\n`);
+    const indexHash = await execGit(["hash-object", "-w", indexFile], gitDirectory);
+    const marker: GitStateMarker = { version: 1, stateRef: refs.index };
+    const markerFile = join(directory, "marker.json");
+    await writeFile(markerFile, `${JSON.stringify(marker, undefined, 2)}\n`);
+    const markerHash = await execGit(["hash-object", "-w", markerFile], gitDirectory);
+    const tree = await mktree(
+      [`100644 blob ${indexHash}\tpull-requests.json`, `100644 blob ${markerHash}\t${markerPath}`],
+      gitDirectory,
+    );
+    const parentArgs = currentTip === undefined ? [] : ["-p", currentTip];
+    return await execGit(
+      ["commit-tree", tree, ...parentArgs, "-m", "Update Diffowl state marker index"],
+      gitDirectory,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 async function mktree(entries: string[], gitDirectory: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile(
@@ -415,21 +494,58 @@ async function remoteRef(
   ref: string,
   gitDirectory: string,
 ): Promise<string | undefined> {
-  const output = await execGit(["ls-remote", remote, ref], gitDirectory);
-  const [sha] = output.split(/\s+/u);
-  return sha === "" ? undefined : sha;
+  try {
+    const output = await execGit(["ls-remote", remote, ref], gitDirectory);
+    const [sha] = output.split(/\s+/u);
+    return sha === "" ? undefined : sha;
+  } catch (error) {
+    throw configurationFailure(
+      `Unable to read Diffowl state refs from the base repository. Ensure the workflow checkout remote is the base repository and the GitHub token can read Contents. Git said: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
-async function fetchStateRefs(
+async function assertWritableStateRemote(
   remote: string,
-  refs: { state: string; marker: string },
+  refPrefix: string,
   gitDirectory: string,
 ): Promise<void> {
-  const [localState, localMarker, remoteState, remoteMarker] = await Promise.all([
+  const probeRef = `${refPrefix}/access-check/${randomUUID()}`;
+  let head: string;
+  try {
+    head = await execGit(["rev-parse", "--verify", "HEAD^{commit}"], gitDirectory);
+  } catch (error) {
+    throw configurationFailure(
+      `Unable to identify the checked-out base repository revision before writing Finding state. Git said: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  try {
+    await execGit(["push", "--dry-run", remote, `${head}:${probeRef}`], gitDirectory);
+  } catch (error) {
+    throw configurationFailure(
+      `Unable to verify Contents: write permission for the base-repository Finding state ref. Configure the workflow with permissions: contents: write, and do not fall back to comments, checks, artifacts, caches, variables, or ephemeral state. Git said: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+// oxlint-disable-next-line complexity
+async function fetchStateRefs(
+  remote: string,
+  refs: { state: string; marker: string; index: string },
+  gitDirectory: string,
+): Promise<void> {
+  const [localState, localMarker, remoteState, remoteMarker, remoteIndex] = await Promise.all([
     optionalRef(refs.state, gitDirectory),
     optionalRef(refs.marker, gitDirectory),
     remoteRef(remote, refs.state, gitDirectory),
     remoteRef(remote, refs.marker, gitDirectory),
+    remoteRef(remote, refs.index, gitDirectory),
   ]);
   const hadLocalState = localState !== undefined || localMarker !== undefined;
   const hasRemoteState = remoteState !== undefined || remoteMarker !== undefined;
@@ -437,6 +553,9 @@ async function fetchStateRefs(
     throw configurationFailure(
       "The Finding state refs were deleted after prior state. Restore the base-repository Diffowl state refs instead of recreating them.",
     );
+  }
+  if (remoteIndex !== undefined) {
+    await execGit(["fetch", remote, `${refs.index}:${refs.index}`], gitDirectory);
   }
   if (!hasRemoteState) return;
   if (remoteState === undefined || remoteMarker === undefined) {
@@ -461,17 +580,26 @@ async function fetchStateRefs(
 async function pushRefs(
   remote: string,
   commit: string,
-  refs: { state: string; marker: string },
+  indexCommit: string,
+  refs: { state: string; marker: string; index: string },
   gitDirectory: string,
 ): Promise<void> {
   try {
     await execGit(
-      ["push", "--atomic", remote, `${commit}:${refs.state}`, `${commit}:${refs.marker}`],
+      [
+        "push",
+        "--atomic",
+        remote,
+        `${commit}:${refs.state}`,
+        `${commit}:${refs.marker}`,
+        `${indexCommit}:${refs.index}`,
+      ],
       gitDirectory,
     );
     await Promise.all([
       execGit(["update-ref", refs.state, commit], gitDirectory),
       execGit(["update-ref", refs.marker, commit], gitDirectory),
+      execGit(["update-ref", refs.index, indexCommit], gitDirectory),
     ]);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -492,6 +620,13 @@ export class GitReviewPersistenceStore implements ReviewPersistenceStore {
     this.gitDirectory = options.gitDirectory ?? process.cwd();
   }
 
+  async prepare(key: PullRequestPersistenceKey): Promise<void> {
+    const refs = refsFor(key, this.refPrefix);
+    await fetchStateRefs(this.remote, refs, this.gitDirectory);
+    await loadState(refs, this.gitDirectory);
+    await assertWritableStateRemote(this.remote, this.refPrefix, this.gitDirectory);
+  }
+
   async withTransaction<T>(
     key: PullRequestPersistenceKey,
     operation: (transaction: ReviewPersistenceTransaction) => Promise<T>,
@@ -508,10 +643,16 @@ export class GitReviewPersistenceStore implements ReviewPersistenceStore {
       const next = transaction.materialize();
       if (next === undefined) return result;
       // oxlint-disable-next-line no-await-in-loop
+      const index = await loadIndex(refs.index, this.gitDirectory);
+      // oxlint-disable-next-line no-await-in-loop
+      const indexTip = await optionalRef(refs.index, this.gitDirectory);
+      // oxlint-disable-next-line no-await-in-loop
       const commit = await commitState(refs, next, this.gitDirectory);
+      // oxlint-disable-next-line no-await-in-loop
+      const indexCommit = await commitIndex(refs, indexTip, index, this.gitDirectory);
       try {
         // oxlint-disable-next-line no-await-in-loop
-        await pushRefs(this.remote, commit, refs, this.gitDirectory);
+        await pushRefs(this.remote, commit, indexCommit, refs, this.gitDirectory);
         return result;
       } catch (error) {
         if (attempt === 1) throw error;

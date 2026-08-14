@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   type PullRequestInput,
+  type ReviewPersistenceStore,
   type RoleExecutionRequest,
   type RoleExecutionResult,
   type VerificationAdapter,
@@ -646,6 +647,7 @@ describe("runReview role execution", () => {
   });
 });
 
+// oxlint-disable-next-line max-lines-per-function
 describe("runReview budget enforcement", () => {
   it("enforces the configured hard review timeout and keeps completed artifacts", async () => {
     const timeoutPolicy = {
@@ -691,6 +693,35 @@ describe("runReview budget enforcement", () => {
     finishLateExecution?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(outcome.executionArtifacts).toEqual(returnedArtifacts);
+  });
+
+  it("prepares required persistence before executing review roles", async () => {
+    let executed = false;
+    const persistence: ReviewPersistenceStore = {
+      prepare: async () => {
+        throw new Error(
+          "GitHub Finding state is not configured correctly: Contents: write missing.",
+        );
+      },
+      withTransaction: async () => {
+        throw new Error("transaction should not start");
+      },
+    };
+
+    const outcome = await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      persistence,
+      executeRole: async (request) => {
+        executed = true;
+        return emptyRoleResult(request);
+      },
+    });
+
+    expect(executed).toBe(false);
+    expect(outcome).toMatchObject({
+      type: "configuration_failure",
+      reason: "GitHub Finding state is not configured correctly: Contents: write missing.",
+    });
   });
 
   it("fails configuration when a referenced credential profile is missing", async () => {
