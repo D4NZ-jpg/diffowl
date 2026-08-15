@@ -131,6 +131,7 @@ export {
 } from "./finding-ledger.js";
 export {
   findingIdentityMarker,
+  parseFindingDiscussionCommandBody,
   parseFindingDiscussionEvent,
   recognizeFindingDiscussionCommands,
 } from "./finding-discussion.js";
@@ -146,6 +147,7 @@ export type {
   FindingDiscussionCommand,
   FindingDiscussionComment,
   FindingDiscussionEffects,
+  ParsedFindingDiscussionCommand,
 } from "./finding-discussion.js";
 export { GitReviewPersistenceStore } from "./git-state-persistence.js";
 export { FileSystemReviewPersistenceStore } from "./persistence.js";
@@ -185,6 +187,7 @@ export interface ReviewDependencies {
   resolvedFingerprints?: readonly string[] | undefined;
   findingDispositions?: Readonly<Record<string, FindingDispositionState>> | undefined;
   reassessedFingerprints?: readonly string[] | undefined;
+  findingReassessmentContexts?: Readonly<Record<string, string>> | undefined;
   findingDiscussionEvents?: readonly FindingDiscussionEvent[] | undefined;
 }
 
@@ -287,16 +290,22 @@ function incompleteCoverageReason(verification: VerificationContext): string | u
     : `Review coverage is partial: ${verification.coverageGaps.join(" ")}`;
 }
 
-function ledgerSnapshot(finding: {
-  fingerprint: { value: string };
-  summary: string;
-  location?: { path: string } | undefined;
-  locationPath?: string | undefined;
-}): LedgerFindingSnapshot {
+function ledgerSnapshot(
+  finding: {
+    fingerprint: { value: string };
+    summary: string;
+    location?: { path: string; line?: number | undefined } | undefined;
+    locationPath?: string | undefined;
+    locationLine?: number | undefined;
+  },
+  reviewedHeadSha: string,
+): LedgerFindingSnapshot {
   return {
     fingerprint: finding.fingerprint.value,
     summary: finding.summary,
     locationPath: finding.location?.path ?? finding.locationPath,
+    locationLine: finding.location?.line ?? finding.locationLine,
+    reviewedHeadSha,
   };
 }
 
@@ -316,14 +325,20 @@ function completedForLedger(outcome: ReviewOutcome): boolean {
   );
 }
 
-function findingsForLedger(outcome: ReviewOutcome): LedgerFindingSnapshot[] {
+function findingsForLedger(
+  outcome: ReviewOutcome,
+  reviewedHeadSha: string,
+): LedgerFindingSnapshot[] {
   return "materialFindings" in outcome && outcome.materialFindings !== undefined
-    ? outcome.materialFindings.map(ledgerSnapshot)
+    ? outcome.materialFindings.map((finding) => ledgerSnapshot(finding, reviewedHeadSha))
     : [];
 }
 
-function suppressedForLedger(findings: SuppressedFinding[]): LedgerFindingSnapshot[] {
-  return findings.map(ledgerSnapshot);
+function suppressedForLedger(
+  findings: SuppressedFinding[],
+  reviewedHeadSha: string,
+): LedgerFindingSnapshot[] {
+  return findings.map((finding) => ledgerSnapshot(finding, reviewedHeadSha));
 }
 
 function ledgerTransitions(previousLedger: FindingLedger | undefined, ledger: FindingLedger) {
@@ -386,8 +401,8 @@ async function persistOutcome(
         previous: previousLedger,
         runId,
         completion: completedForLedger(outcome) ? "completed_permitted" : "incomplete",
-        materialFindings: findingsForLedger(outcome),
-        suppressedFindings: suppressedForLedger(suppressedFindings),
+        materialFindings: findingsForLedger(outcome, input.headSha),
+        suppressedFindings: suppressedForLedger(suppressedFindings, input.headSha),
         dispositions: dependencies.findingDispositions,
         obsoleteFingerprints: dependencies.obsoleteFingerprints,
         resolvedFingerprints: dependencies.resolvedFingerprints,
@@ -546,6 +561,7 @@ export async function runReview(
         input.trust.capabilities.validationCommands !== "denied",
         executionArtifacts,
         verification,
+        dependencies.findingReassessmentContexts,
       ),
     result.policy.limits.reviewTimeoutSeconds,
     controller,

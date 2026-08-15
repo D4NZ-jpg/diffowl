@@ -5,11 +5,16 @@ import {
   REVIEW_REQUEST_COOLDOWN_DEFAULT_SECONDS,
 } from "./project-policy.js";
 import {
-  loadReviewRequestEvent,
   persistReviewRequestDecision,
+  resolveDispatchRecord,
   saveReviewRequestEffect,
 } from "./review-request-lifecycle.js";
-import type { ReviewRequestEventRecord } from "./review-request-state.js";
+import { routedCommandContext } from "./review-request-state.js";
+import type {
+  CommandWorkType,
+  ReviewRequestEventRecord,
+  RoutedCommand,
+} from "./review-request-state.js";
 
 export {
   claimReviewRequest,
@@ -24,6 +29,7 @@ export interface ReviewRequestEvent {
   pullRequestNumber: number;
   actor: string;
   body: string;
+  createdAt?: string | undefined;
 }
 
 export interface ReviewRequestPullRequest {
@@ -44,6 +50,11 @@ export interface ReviewDispatch {
   baseSha: string;
   headSha: string;
   eventId: string;
+  command?: RoutedCommand | undefined;
+  workType?: CommandWorkType | undefined;
+  findingFingerprint?: string | undefined;
+  findingContext?: string | undefined;
+  rootCommentId?: string | undefined;
 }
 
 export interface ReviewRequestIo {
@@ -165,6 +176,7 @@ async function dispatch(
     baseSha: pullRequest.baseSha,
     headSha: record.headSha,
     eventId: record.eventId,
+    ...routedCommandContext(record),
   });
   await saveReviewRequestEffect(persistence, key, record.eventId, "dispatchedAt", observedAt);
 }
@@ -178,13 +190,18 @@ export async function routeReviewRequest(
   const command = recognizedCommand(event.body);
   if (command === undefined) return { type: "ignored" };
   const context = await routeContext(event, io);
-  const observedAt = now.toISOString();
+  const observedAt =
+    event.createdAt !== undefined && Number.isFinite(Date.parse(event.createdAt))
+      ? new Date(event.createdAt).toISOString()
+      : now.toISOString();
   const key = keyFor(event);
   await persistence.prepare?.(key);
   const record = await persistReviewRequestDecision(persistence, key, {
     eventId: event.eventId,
     actor: event.actor,
+    command: "review",
     deprecatedAlias: command.deprecatedAlias,
+    workType: "full_review",
     observedAt,
     headSha: context.pullRequest.headSha,
     cooldownSeconds: context.cooldownSeconds,
@@ -195,10 +212,7 @@ export async function routeReviewRequest(
     return refuse(event, io, persistence, key, record, observedAt);
   }
   await acknowledge(event, io, persistence, key, record, observedAt);
-  const dispatchRecord =
-    record.decision === "dispatch"
-      ? record
-      : await loadReviewRequestEvent(persistence, key, record.requestId!);
+  const dispatchRecord = await resolveDispatchRecord(persistence, key, record);
   if (dispatchRecord?.decision === "dispatch") {
     await dispatch(event, context.pullRequest, io, persistence, key, dispatchRecord, observedAt);
   }

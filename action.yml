@@ -17,7 +17,19 @@ inputs:
     description: The verified head revision for an authenticated Review request workflow dispatch.
     required: false
   review-request-event-id:
-    description: The durable command event identity authorizing a Review request workflow dispatch.
+    description: The durable command event identity authorizing a Review or Finding discussion workflow dispatch.
+    required: false
+  command-work-type:
+    description: The durable command route selected by the trusted default-branch router.
+    required: false
+  finding-fingerprint:
+    description: The stable Finding identity for bounded Finding discussion work.
+    required: false
+  finding-context:
+    description: Author-supplied product or technical context for bounded reassessment.
+    required: false
+  finding-root-comment-id:
+    description: The stable root review-comment identity for the Finding discussion.
     required: false
 outputs:
   outcome:

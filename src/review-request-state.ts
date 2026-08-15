@@ -1,19 +1,45 @@
+import type { FindingDiscussionCommand } from "./finding-discussion.js";
+
 export type ReviewRequestDecision = "dispatch" | "coalesce" | "refuse";
 export type ReviewRequestStatus = "queued" | "active" | "terminal" | "superseded";
+export type CommandWorkType = "full_review" | "finding_discussion";
+export type RoutedCommand = "review" | FindingDiscussionCommand;
 
 export interface ReviewRequestEventRecord {
   eventId: string;
   actor: string;
-  command: "review";
+  command: RoutedCommand;
   deprecatedAlias: boolean;
   observedAt: string;
   headSha: string;
+  workType?: CommandWorkType | undefined;
+  findingFingerprint?: string | undefined;
+  findingContext?: string | undefined;
+  rootCommentId?: string | undefined;
+  reviewedHeadSha?: string | undefined;
   decision: ReviewRequestDecision;
   requestId?: string | undefined;
   reason?: string | undefined;
   eyesAt?: string | undefined;
   repliedAt?: string | undefined;
   dispatchedAt?: string | undefined;
+}
+
+export type RoutedCommandContext = Pick<
+  ReviewRequestEventRecord,
+  "command" | "findingFingerprint" | "findingContext" | "rootCommentId"
+> & { workType: CommandWorkType };
+
+export function routedCommandContext(record: ReviewRequestEventRecord): RoutedCommandContext {
+  return {
+    command: record.command,
+    workType: record.workType ?? "full_review",
+    ...(record.findingFingerprint === undefined
+      ? {}
+      : { findingFingerprint: record.findingFingerprint }),
+    ...(record.findingContext === undefined ? {} : { findingContext: record.findingContext }),
+    ...(record.rootCommentId === undefined ? {} : { rootCommentId: record.rootCommentId }),
+  };
 }
 
 export interface ReviewRequestRecord {
@@ -64,6 +90,11 @@ const eventFields = [
   "deprecatedAlias",
   "observedAt",
   "headSha",
+  "workType",
+  "findingFingerprint",
+  "findingContext",
+  "rootCommentId",
+  "reviewedHeadSha",
   "decision",
   "requestId",
   "reason",
@@ -80,6 +111,46 @@ const requestFields = [
   "completedAt",
   "workflowRunId",
 ];
+
+// oxlint-disable-next-line complexity
+function validCommandState(value: Record<string, unknown>): boolean {
+  if (value.command === "review") {
+    return (
+      (value.workType === undefined || value.workType === "full_review") &&
+      value.findingFingerprint === undefined &&
+      value.findingContext === undefined &&
+      value.rootCommentId === undefined &&
+      value.reviewedHeadSha === undefined
+    );
+  }
+  const findingCommands = new Set<unknown>([
+    "accept",
+    "rebut",
+    "suppress",
+    "ignore",
+    "resolved",
+    "recheck",
+    "explain",
+    "reassess",
+  ]);
+  if (value.decision === "refuse") {
+    return (
+      findingCommands.has(value.command) &&
+      (value.workType === "full_review" || value.workType === "finding_discussion")
+    );
+  }
+  return (
+    findingCommands.has(value.command) &&
+    (value.workType === "full_review" || value.workType === "finding_discussion") &&
+    typeof value.findingFingerprint === "string" &&
+    value.findingFingerprint.length > 0 &&
+    optionalString(value.findingContext) &&
+    typeof value.rootCommentId === "string" &&
+    value.rootCommentId.length > 0 &&
+    typeof value.reviewedHeadSha === "string" &&
+    value.reviewedHeadSha.length > 0
+  );
+}
 
 function validEventState(value: Record<string, unknown>): boolean {
   if (value.decision === "refuse") {
@@ -117,17 +188,33 @@ function parseEvent(eventId: string, value: unknown): ReviewRequestEventRecord {
     value.eventId === eventId &&
     typeof value.actor === "string" &&
     value.actor.length > 0 &&
-    value.command === "review" &&
+    [
+      "review",
+      "accept",
+      "rebut",
+      "suppress",
+      "ignore",
+      "resolved",
+      "recheck",
+      "explain",
+      "reassess",
+    ].includes(String(value.command)) &&
     typeof value.deprecatedAlias === "boolean" &&
     timestamp(value.observedAt) &&
     typeof value.headSha === "string" &&
     value.headSha.length > 0 &&
     (decision === "dispatch" || decision === "coalesce" || decision === "refuse") &&
+    optionalString(value.workType) &&
+    optionalString(value.findingFingerprint) &&
+    optionalString(value.findingContext) &&
+    optionalString(value.rootCommentId) &&
+    optionalString(value.reviewedHeadSha) &&
     optionalString(value.requestId) &&
     optionalString(value.reason) &&
     optionalTimestamp(value.eyesAt) &&
     optionalTimestamp(value.repliedAt) &&
     optionalTimestamp(value.dispatchedAt) &&
+    validCommandState(value) &&
     validEventState(value);
   if (!valid) throw new Error(`Review request event "${eventId}" is invalid.`);
   return value as unknown as ReviewRequestEventRecord;

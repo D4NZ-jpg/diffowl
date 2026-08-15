@@ -1,5 +1,5 @@
 name: Review OWL request router
-description: Authenticate a pull-request Review request and dispatch the canonical Review OWL workflow.
+description: Authenticate pull-request Review and inline Finding commands, then dispatch the canonical Review OWL workflow.
 inputs:
   workflow:
     description: The default-branch workflow file that runs Review OWL.

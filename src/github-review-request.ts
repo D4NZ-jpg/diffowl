@@ -1,23 +1,15 @@
 import type { GitHubTransport } from "./github-publication.js";
+import {
+  githubMarkerExists,
+  githubRecord as record,
+  githubText as text,
+} from "./github-response.js";
 import type {
   RepositoryPermission,
+  ReviewDispatch,
   ReviewRequestIo,
   ReviewRequestPullRequest,
 } from "./review-request.js";
-
-function record(value: unknown, context: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${context} returned an invalid response.`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function text(value: unknown, context: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`${context} returned an invalid response.`);
-  }
-  return value;
-}
 
 export async function readReviewRequestPullRequest(
   transport: GitHubTransport,
@@ -72,33 +64,51 @@ async function readPermission(
     : "none";
 }
 
-function commentHasMarker(comment: unknown, marker: string): boolean {
-  return (
-    typeof comment === "object" &&
-    comment !== null &&
-    typeof (comment as Record<string, unknown>).body === "string" &&
-    ((comment as Record<string, unknown>).body as string).includes(marker)
-  );
-}
-
-async function refusalExists(
+function refusalExists(
   transport: GitHubTransport,
   options: GitHubReviewRequestIoOptions,
   marker: string,
 ): Promise<boolean> {
-  for (let page = 1; page <= 10; page += 1) {
-    // oxlint-disable-next-line no-await-in-loop
-    const response = await transport({
-      method: "GET",
-      path: `/repos/${options.repository}/issues/${options.pullRequestNumber}/comments?per_page=100&sort=created&direction=desc&page=${page}`,
-    });
-    if (!Array.isArray(response)) {
-      throw new Error("GitHub issue comments returned an invalid response.");
-    }
-    if (response.some((comment) => commentHasMarker(comment, marker))) return true;
-    if (response.length < 100) return false;
-  }
-  throw new Error("Unable to reconcile a Review-request refusal within 1,000 comments.");
+  return githubMarkerExists(
+    marker,
+    (page) =>
+      transport({
+        method: "GET",
+        path: `/repos/${options.repository}/issues/${options.pullRequestNumber}/comments?per_page=100&sort=created&direction=desc&page=${page}`,
+      }),
+    "GitHub issue comments",
+  );
+}
+
+export function workflowDispatchRequest(
+  request: ReviewDispatch,
+  workflow: string,
+): { method: "POST"; path: string; body: unknown } {
+  const findingCommand = request.command === "recheck" || request.command === "reassess";
+  return {
+    method: "POST",
+    path: `/repos/${request.repository}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`,
+    body: {
+      ref: request.ref,
+      inputs: {
+        repository: request.repository,
+        "pull-request-number": String(request.pullRequestNumber),
+        "base-sha": request.baseSha,
+        "head-sha": request.headSha,
+        "review-request-event-id": request.eventId,
+        ...(findingCommand ? { "command-work-type": request.workType ?? "full_review" } : {}),
+        ...(request.findingFingerprint === undefined
+          ? {}
+          : { "finding-fingerprint": request.findingFingerprint }),
+        ...(request.findingContext === undefined
+          ? {}
+          : { "finding-context": request.findingContext }),
+        ...(request.rootCommentId === undefined
+          ? {}
+          : { "finding-root-comment-id": request.rootCommentId }),
+      },
+    },
+  };
 }
 
 export interface GitHubReviewRequestIoOptions {
@@ -134,20 +144,7 @@ export function createGitHubReviewRequestIo(
       });
     },
     dispatchReview: async (request) => {
-      await transport({
-        method: "POST",
-        path: `/repos/${request.repository}/actions/workflows/${encodeURIComponent(options.workflow)}/dispatches`,
-        body: {
-          ref: request.ref,
-          inputs: {
-            repository: request.repository,
-            "pull-request-number": String(request.pullRequestNumber),
-            "base-sha": request.baseSha,
-            "head-sha": request.headSha,
-            "review-request-event-id": request.eventId,
-          },
-        },
-      });
+      await transport(workflowDispatchRequest(request, options.workflow));
     },
   };
 }

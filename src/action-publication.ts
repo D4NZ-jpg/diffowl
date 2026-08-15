@@ -2,6 +2,10 @@
 import type { ActionIo } from "./action.js";
 import type { GitHubPullRequestEvent } from "./action-event.js";
 import type { JsonValue } from "./canonical-json.js";
+import type {
+  FindingDiscussionPublicationReceipt,
+  FindingDiscussionPublicationUpdate,
+} from "./github-finding-command.js";
 import { jobSummaryBody } from "./github-presentation.js";
 import {
   IncompletePublicationError,
@@ -279,6 +283,62 @@ async function preserveFailureEffects(
     await savePublicationEffects(persistence, repository, pullRequestNumber, outcome, effects);
   } catch {
     // Failure reporting must still reach the available Action surfaces.
+  }
+}
+
+async function saveFindingDiscussionEffects(
+  persistence: ReviewPersistenceStore,
+  repository: string,
+  pullRequestNumber: number,
+  eventId: string,
+  receipt: FindingDiscussionPublicationReceipt | { result: PublicationResult; reason?: string },
+): Promise<void> {
+  await persistence.withTransaction({ repository, pullRequestNumber }, async (transaction) => {
+    await transaction.savePublicationEffects(`command-${eventId}`, receipt as unknown as JsonValue);
+  });
+}
+
+export async function publishFindingDiscussionActionOutcome(
+  io: ActionIo,
+  repository: string,
+  pullRequestNumber: number,
+  eventId: string,
+  outcome: ReviewOutcome,
+  update: FindingDiscussionPublicationUpdate,
+  persistence: ReviewPersistenceStore,
+): Promise<void> {
+  await setReviewOutputs(io, outcome);
+  if (
+    io.publishFindingDiscussion === undefined ||
+    outcome.trust.class !== "trusted_same_repo_pull_request"
+  ) {
+    await recordNotAttemptedPublication(io, outcome);
+    return;
+  }
+  let publication:
+    | FindingDiscussionPublicationReceipt
+    | { result: PublicationResult; reason?: string };
+  try {
+    publication = await io.publishFindingDiscussion(update);
+  } catch (error) {
+    publication =
+      error instanceof IncompletePublicationError
+        ? (error.confirmedEffects as FindingDiscussionPublicationReceipt)
+        : publicationOutput(isPublicationRefusal(error) ? "refused" : "incomplete", error);
+  }
+  await preserveFailureEffects(persistence, repository, pullRequestNumber, outcome, publication);
+  await saveFindingDiscussionEffects(
+    persistence,
+    repository,
+    pullRequestNumber,
+    eventId,
+    publication,
+  );
+  await recordPublicationOutput(io, outcome, publication);
+  if (publication.result !== "complete") {
+    throw new Error(
+      publication.reason ?? `Finding discussion publication was ${publication.result}.`,
+    );
   }
 }
 

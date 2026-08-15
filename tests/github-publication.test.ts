@@ -39,13 +39,13 @@ const authorization = {
 type IssueCommentPage = Array<{
   id: number;
   body: string;
-  user: { login: string };
+  user: { login: string; type?: string };
 }>;
 type ReviewPage = Array<{
   id: number;
   body: string;
   commit_id: string;
-  user: { login: string };
+  user: { login: string; type?: string };
   html_url?: string;
 }>;
 
@@ -229,7 +229,7 @@ function fakeTransport(
         id,
         body: (request.body as { body: string }).body,
         commit_id: target.headSha,
-        user: { login: "github-actions[bot]" },
+        user: { login: "github-actions[bot]", type: "Bot" },
       });
       if (options.failAfterReview === true)
         throw new Error("connection lost after review creation");
@@ -768,6 +768,91 @@ function publicationAdapterTests(): void {
     expect(receipt.unanchoredFindingCount).toBe(1);
     const review = requests.find((request) => request.path.endsWith("/reviews"));
     expect(JSON.stringify(review?.body)).toContain("Findings without a current inline anchor");
+  });
+
+  // oxlint-disable-next-line max-lines-per-function
+  it("retains confirmed Finding discussion effects when later review publication fails", async () => {
+    const existingFingerprint = `sha256:${"a".repeat(64)}`;
+    const newFingerprint = `sha256:${"b".repeat(64)}`;
+    const existingFinding = {
+      ...finding(7),
+      fingerprint: { ...findingFingerprint, value: existingFingerprint },
+      lifecycleState: "persisting" as const,
+    };
+    const newFinding = {
+      ...finding(7),
+      fingerprint: { ...findingFingerprint, value: newFingerprint },
+      summary: "A second material problem",
+    };
+    const reviewOutcome = {
+      ...outcome("findings"),
+      materialFindings: [existingFinding, newFinding],
+      run: {
+        runId: "run-with-lifecycle-effect",
+        recordVersion: 1,
+        outcome: {
+          ledgerTransitions: [
+            {
+              fingerprint: existingFingerprint,
+              lifecycleState: "persisting",
+              previousLifecycleState: "new",
+              changed: true,
+            },
+          ],
+        },
+        ledgerTransitions: [{ fingerprint: existingFingerprint, lifecycleState: "persisting" }],
+      },
+    } as unknown as ReviewOutcome;
+    const transport: GitHubTransport = async (request) => {
+      if (request.method === "GET" && /\/pulls\/\d+$/u.test(request.path)) {
+        return { head: { sha: target.headSha } };
+      }
+      if (request.method === "GET" && request.path.includes("/comments")) {
+        return [
+          {
+            id: 10,
+            body: `<!-- diffowl:finding:v1 fingerprint=${existingFingerprint} -->\n${FINDING_COMMENT_MARKER}`,
+            user: { login: "github-actions[bot]", type: "Bot" },
+          },
+        ];
+      }
+      if (request.method === "GET" && request.path.includes("/reviews")) return [];
+      if (request.path.endsWith("/10/replies")) return {};
+      if (request.path === "/graphql") {
+        return {
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      id: "thread-10",
+                      isResolved: false,
+                      comments: { nodes: [{ databaseId: 10 }] },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (request.path.endsWith("/reviews")) throw new Error("review creation failed");
+      return {};
+    };
+
+    await expect(
+      publishReviewOutcome(transport, target, reviewOutcome, authorization),
+    ).rejects.toMatchObject({
+      confirmedEffects: {
+        result: "incomplete",
+        findingDiscussionEffects: [
+          expect.objectContaining({ rootCommentId: "10", replyCreated: true }),
+        ],
+        reviewEffectId: expect.stringMatching(/^sha256:[\da-f]{64}$/u),
+      },
+    });
   });
 
   it("does not create a summary comment when review publication fails", async () => {

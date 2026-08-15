@@ -20,6 +20,18 @@ on:
       review-request-event-id:
         required: true
         type: string
+      command-work-type:
+        required: false
+        type: string
+      finding-fingerprint:
+        required: false
+        type: string
+      finding-context:
+        required: false
+        type: string
+      finding-root-comment-id:
+        required: false
+        type: string
 
 concurrency:
   group: review-owl-${{ inputs.pull-request-number || github.event.pull_request.number }}
@@ -47,6 +59,10 @@ jobs:
           base-sha: ${{ inputs.base-sha }}
           head-sha: ${{ inputs.head-sha }}
           review-request-event-id: ${{ inputs.review-request-event-id }}
+          command-work-type: ${{ inputs.command-work-type }}
+          finding-fingerprint: ${{ inputs.finding-fingerprint }}
+          finding-context: ${{ inputs.finding-context }}
+          finding-root-comment-id: ${{ inputs.finding-root-comment-id }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

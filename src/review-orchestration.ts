@@ -793,6 +793,7 @@ export async function orchestrateReviewRoles(
     limitations: [],
     coverageGaps: [],
   },
+  findingReassessmentContexts?: Readonly<Record<string, string>>,
 ): Promise<OrchestrationExecutionResult> {
   const plan = orchestrationPlan(policy);
   const state: OrchestrationState = {
@@ -825,7 +826,17 @@ export async function orchestrateReviewRoles(
         },
       );
       Object.assign(verification, gatheredVerification);
-      state.roleInput = { candidateFindings: state.candidates, ...verification };
+      state.roleInput = {
+        candidateFindings: state.candidates,
+        ...verification,
+        ...(findingReassessmentContexts === undefined
+          ? {}
+          : {
+              findingReassessmentContexts: Object.entries(findingReassessmentContexts).map(
+                ([fingerprint, context]) => ({ fingerprint, context }),
+              ),
+            }),
+      };
     }
     // oxlint-disable-next-line no-await-in-loop
     const result = await executeRoleSafely(executeRole, {

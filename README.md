@@ -22,6 +22,10 @@ on:
       base-sha: { required: true, type: string }
       head-sha: { required: true, type: string }
       review-request-event-id: { required: true, type: string }
+      command-work-type: { required: false, type: string }
+      finding-fingerprint: { required: false, type: string }
+      finding-context: { required: false, type: string }
+      finding-root-comment-id: { required: false, type: string }
 
 concurrency:
   group: review-owl-${{ inputs.pull-request-number || github.event.pull_request.number }}
@@ -49,13 +53,17 @@ jobs:
           base-sha: ${{ inputs.base-sha }}
           head-sha: ${{ inputs.head-sha }}
           review-request-event-id: ${{ inputs.review-request-event-id }}
+          command-work-type: ${{ inputs.command-work-type }}
+          finding-fingerprint: ${{ inputs.finding-fingerprint }}
+          finding-context: ${{ inputs.finding-context }}
+          finding-root-comment-id: ${{ inputs.finding-root-comment-id }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-To accept `/diffowl review`, also install the trusted [`issue_comment` router workflow](examples/representative-repository/.github/workflows/review-request.yml). It checks out only the default branch, carries no provider secrets, authenticates the actor against the latest same-repository pull-request head, records the command event before effects, and dispatches this canonical workflow at the default-branch ref with the verified revision as explicit inputs. Accepted and coalesced requests receive an eyes reaction. Refused requests receive one short reply. Queued progress appears on the trusted default-branch Actions run because GitHub binds a `workflow_dispatch` check to its dispatch ref; Diffowl does not create a second PR-head custom check. `/diffowl rerun` is a deprecated alias for the same path.
+To accept `/diffowl review` and inline Finding commands, also install the trusted [`issue_comment` and `pull_request_review_comment` router workflow](examples/representative-repository/.github/workflows/review-request.yml). It checks out only the default branch, carries no provider secrets, authenticates the actor against the latest same-repository pull-request head, resolves nested replies to the stable root Finding marker, records each command event before effects, and dispatches this canonical workflow at the default-branch ref with the verified revision as explicit inputs. `/diffowl recheck` reruns deterministic Verification and `/diffowl reassess <context>` supplies product or technical context without copying a Finding identity. A command on the currently reviewed head runs bounded Finding discussion work without a full Review; a newer head uses the same canonical full Review path. Accepted and coalesced requests receive an eyes reaction. Refused requests receive one short reply. Queued progress appears on the trusted default-branch Actions run because GitHub binds a `workflow_dispatch` check to its dispatch ref; Diffowl does not create a second PR-head custom check. `/diffowl rerun` is a deprecated alias for the same path.
 
 The Action's `default` credential profile uses RunCell's `env` credential mode. Provider SDKs read their normal variables from GitHub Secrets. Embedded deployments may instead supply any RunCell `Credentials` configuration, including an explicit agent directory or shared `CredentialStore` for refreshable OAuth credentials.
 
@@ -71,7 +79,7 @@ The engine returns data only; GitHub publication remains the responsibility of t
 
 The Action writes a compact job summary and returns the Publication result with confirmed effects separately through the `publication` output, so publication delivery never enters Review engine semantics. The summary identifies Review readiness, Review outcome, the reviewed revision, Finding and Verification counts, coverage limits, Publication result, and links to the pull-request review and workflow logs when available. Publication is `complete`, `not_attempted`, `refused`, or `incomplete`. Confirmed partial effects remain in the Publication result for reconciliation, and a refused or incomplete required publication fails the Action without replacing the Review outcome. The publisher uses the separate SHA-bound, bounded, data-only capability class and cannot execute pull-request code. Omit `GITHUB_TOKEN` to record publication as `not_attempted`.
 
-Review OWL finding threads include an engine-owned Finding identity marker and list the minimal audited commands authors can use in replies: `/diffowl accept`, `/diffowl rebut <context>`, `/diffowl suppress <reason>`, `/diffowl ignore <reason>`, `/diffowl resolved`, `/diffowl recheck`, `/diffowl explain`, and `/diffowl reassess <context>`. Embedders pass recognized command events to `runReview` as `findingDiscussionEvents`, `findingDispositions`, `resolvedFingerprints`, and `reassessedFingerprints`; the persisted Finding ledger keeps the discussion events with actor, command, timestamp, source, and body so targeted human review can audit why a lifecycle changed.
+Review OWL finding threads include an engine-owned Finding identity marker and list the minimal audited commands authors can use in replies: `/diffowl accept`, `/diffowl rebut <context>`, `/diffowl suppress <reason>`, `/diffowl ignore <reason>`, `/diffowl resolved`, `/diffowl recheck`, `/diffowl explain`, and `/diffowl reassess <context>`. GitHub-hosted commands are event-driven rather than discovered by rescanning historical comments. Exact top-level commands are required, so quoted, fenced, and multiline command-looking text is ignored. The persisted Finding ledger keeps each recognized event with actor, command, timestamp, source, and body; the GitHub projection replies in the original discussion and resolves or reopens the thread according to its visible disposition.
 
 Completed reviews return either `clean` or `findings` with `coverage: "completed_permitted"`. `clean` means the completed permitted review found no material findings; it is not proof of correctness. Material findings and non-blocking `advisorySuggestions` use separate fields. Each material finding includes its location, impact, evidence objects, lifecycle state, and verification state.
 

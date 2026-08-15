@@ -157,6 +157,61 @@ it("coalesces an active Review request for the same head", async () => {
   expect(effects).toEqual(["eyes:9003", "dispatch:9003", "eyes:9004"]);
 });
 
+it("does not coalesce a full Review onto same-head Finding command work", async () => {
+  const persistence = await stateStore();
+  const findingFingerprint = `sha256:${"a".repeat(64)}`;
+  await persistence.withTransaction(key, async (transaction) => {
+    await transaction.saveReviewRequests({
+      version: 1,
+      events: {
+        finding: {
+          eventId: "finding",
+          actor: "octocat",
+          command: "recheck",
+          deprecatedAlias: false,
+          observedAt: "2026-08-15T00:00:00.000Z",
+          headSha: "head-sha",
+          workType: "finding_discussion",
+          findingFingerprint,
+          rootCommentId: "10",
+          reviewedHeadSha: "head-sha",
+          decision: "dispatch",
+          requestId: "finding",
+        },
+      },
+      requests: {
+        finding: {
+          requestId: "finding",
+          headSha: "head-sha",
+          status: "queued",
+          requestedAt: "2026-08-15T00:00:00.000Z",
+        },
+      },
+    });
+  });
+  const dispatched: string[] = [];
+
+  const result = await routeReviewRequest(
+    event("review", { createdAt: "2026-08-15T00:00:01.000Z" }),
+    reviewIo({
+      dispatchReview: async (request) => {
+        dispatched.push(request.eventId);
+      },
+    }),
+    persistence,
+  );
+
+  expect(result.type).toBe("dispatched");
+  expect(dispatched).toEqual(["review"]);
+  await persistence.withTransaction(key, async (transaction) => {
+    expect((await transaction.loadReviewRequests())?.events.review).toMatchObject({
+      command: "review",
+      decision: "dispatch",
+      requestId: "review",
+    });
+  });
+});
+
 it("recovers a failed dispatch when a same-head request coalesces", async () => {
   const persistence = await stateStore();
   const attempts: string[] = [];
@@ -336,17 +391,17 @@ it("refuses a delayed old-head command after a newer request commits", async () 
   const io = reviewIo({ readPullRequest: async () => pullRequest({ headSha }) });
 
   await routeReviewRequest(
-    event("newer-command"),
-    io,
-    persistence,
-    new Date("2026-08-15T00:00:02.000Z"),
-  );
-  headSha = "old-head";
-  const delayed = await routeReviewRequest(
-    event("delayed-command"),
+    event("newer-command", { createdAt: "2026-08-15T00:00:02.000Z" }),
     io,
     persistence,
     new Date("2026-08-15T00:00:01.000Z"),
+  );
+  headSha = "old-head";
+  const delayed = await routeReviewRequest(
+    event("delayed-command", { createdAt: "2026-08-15T00:00:01.000Z" }),
+    io,
+    persistence,
+    new Date("2026-08-15T00:00:03.000Z"),
   );
 
   expect(delayed).toEqual({

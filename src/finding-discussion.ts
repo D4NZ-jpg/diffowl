@@ -1,6 +1,6 @@
 const fingerprintPattern = /sha256:[\da-f]{64}/iu;
 const commandPattern =
-  /^\/(?:diffowl|review-owl)\s+(accept|rebut|suppress|ignore|resolved|resolve|recheck|explain|reassess)(?:\s+([\s\S]*))?$/imu;
+  /^\/(?:diffowl|review-owl)\s+(accept|rebut|suppress|ignore|resolved|resolve|recheck|explain|reassess)(?:[ \t]+([^\r\n]*))?$/iu;
 
 export type FindingDispositionState = "accepted" | "rebutted" | "suppressed";
 
@@ -34,6 +34,11 @@ export interface FindingDiscussionEvent {
   source?: string | undefined;
 }
 
+export interface ParsedFindingDiscussionCommand {
+  command: FindingDiscussionCommand;
+  body?: string | undefined;
+}
+
 export interface FindingDiscussionEffects {
   dispositions?: Readonly<Record<string, FindingDispositionState>> | undefined;
   resolvedFingerprints?: readonly string[] | undefined;
@@ -62,6 +67,26 @@ function normalizedCommand(value: string): FindingDiscussionCommand {
   return value.toLowerCase() === "resolve"
     ? "resolved"
     : (value.toLowerCase() as FindingDiscussionCommand);
+}
+
+export function parseFindingDiscussionCommandBody(
+  value: string,
+): ParsedFindingDiscussionCommand | undefined {
+  const match = value.match(commandPattern);
+  const command = match?.[1];
+  if (command === undefined) return undefined;
+  const normalized = normalizedCommand(command);
+  const suppliedBody = match?.[2]?.trim();
+  if (normalized === "recheck" && suppliedBody !== undefined && suppliedBody !== "") {
+    return undefined;
+  }
+  const body = bodyForEvent(normalized, suppliedBody);
+  return body === undefined
+    ? undefined
+    : {
+        command: normalized,
+        ...(body === "" ? {} : { body }),
+      };
 }
 
 function addUnique(values: Set<string>, fingerprint: string): void {
@@ -115,14 +140,12 @@ function recognizedEvent(
   authors: ReadonlySet<string> | undefined,
 ): FindingDiscussionEvent | undefined {
   if (authors !== undefined && !authors.has(comment.actor)) return undefined;
-  const command = comment.body.match(commandPattern)?.[1];
-  if (command === undefined) return undefined;
-  const normalized = normalizedCommand(command);
-  const body = bodyForEvent(normalized, comment.body.match(commandPattern)?.[2]?.trim());
+  const parsed = parseFindingDiscussionCommandBody(comment.body);
+  if (parsed === undefined) return undefined;
   const fingerprint = findingFingerprint(comment);
-  return fingerprint === undefined || body === undefined
+  return fingerprint === undefined
     ? undefined
-    : eventFrom(comment, fingerprint, normalized, body);
+    : eventFrom(comment, fingerprint, parsed.command, parsed.body);
 }
 
 function optionalString(value: unknown): value is string | undefined {

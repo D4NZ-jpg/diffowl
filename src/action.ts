@@ -1,15 +1,21 @@
+/* oxlint-disable max-lines */
 import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
-import type { GitHubPullRequestEvent } from "./action-event.js";
 import {
   actionReviewRequestIsActive,
   claimActionReviewRequest,
   completeActionReviewRequest,
   resolveActionEvent,
 } from "./action-review-request.js";
+import { runFindingDiscussionWork } from "./finding-discussion-work.js";
 import { addedLinesFromDiff } from "./github-diff.js";
 import { readGitFileAtRevision } from "./git-read.js";
+import {
+  publishFindingDiscussionUpdate,
+  type FindingDiscussionPublicationReceipt,
+  type FindingDiscussionPublicationUpdate,
+} from "./github-finding-command.js";
 import {
   createGitHubTransport,
   type PublicationAuthorization,
@@ -19,18 +25,14 @@ import {
 } from "./github-publication.js";
 import {
   publishActionOutcome,
+  publishFindingDiscussionActionOutcome,
   recordNotAttemptedPublication,
   setReviewOutputs,
 } from "./action-publication.js";
-import {
-  type FindingDiscussionComment,
-  recognizeFindingDiscussionCommands,
-} from "./finding-discussion.js";
-import { listFindingDiscussionComments } from "./github-discussion.js";
 import { readReviewRequestPullRequest } from "./github-review-request.js";
 import { createHostVerificationAdapter } from "./host-verification.js";
+import { parseProjectPolicy, PROJECT_POLICY_PATH } from "./project-policy.js";
 import {
-  PROJECT_POLICY_PATH,
   type DiffowlCredentials,
   type ReviewOutcome,
   type RoleExecutionRequest,
@@ -57,10 +59,9 @@ export interface ActionIo {
   setOutput(name: string, value: string): Promise<void>;
   writeJobSummary?(contents: string): Promise<void>;
   workflowRunUrl?: string;
-  listFindingDiscussionComments?(
-    repository: string,
-    pullRequestNumber: number,
-  ): Promise<FindingDiscussionComment[]>;
+  publishFindingDiscussion?(
+    update: FindingDiscussionPublicationUpdate,
+  ): Promise<FindingDiscussionPublicationReceipt>;
   publishOutcome?(
     target: PublicationTarget,
     outcome: ReviewOutcome,
@@ -132,8 +133,8 @@ export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
       : {
           readPullRequest: (repository: string, pullRequestNumber: number) =>
             readReviewRequestPullRequest(transport, repository, pullRequestNumber),
-          listFindingDiscussionComments: (repository: string, pullRequestNumber: number) =>
-            listFindingDiscussionComments(transport, repository, pullRequestNumber),
+          publishFindingDiscussion: (update: FindingDiscussionPublicationUpdate) =>
+            publishFindingDiscussionUpdate(transport, update),
           publishOutcome: (
             target: PublicationTarget,
             outcome: ReviewOutcome,
@@ -184,26 +185,46 @@ function actionPersistence(
     : new FileSystemReviewPersistenceStore(stateDirectory);
 }
 
-async function reviewDependencies(
+type ClaimedActionRequest = Awaited<ReturnType<typeof claimActionReviewRequest>>;
+
+const commandDispositions = {
+  accept: "accepted",
+  rebut: "rebutted",
+  suppress: "suppressed",
+  ignore: "suppressed",
+} as const;
+
+function findingCommandDependencies(request: ClaimedActionRequest) {
+  if (request === undefined || request === false || request.findingFingerprint === undefined) {
+    return {};
+  }
+  const fingerprint = request.findingFingerprint;
+  const disposition = commandDispositions[request.command as keyof typeof commandDispositions];
+  return {
+    ...(disposition === undefined ? {} : { findingDispositions: { [fingerprint]: disposition } }),
+    ...(request.command === "resolved" ? { resolvedFingerprints: [fingerprint] } : {}),
+    ...(request.command === "reassess"
+      ? {
+          reassessedFingerprints: [fingerprint],
+          findingReassessmentContexts:
+            request.findingContext === undefined ? {} : { [fingerprint]: request.findingContext },
+        }
+      : {}),
+  };
+}
+
+function reviewDependencies(
   env: NodeJS.ProcessEnv,
   io: ActionIo,
-  repository: string,
-  pullRequest: GitHubPullRequestEvent["pull_request"],
   persistence: ReviewPersistenceStore | undefined,
+  request: ClaimedActionRequest,
 ) {
-  const effects = recognizeFindingDiscussionCommands(
-    (await io.listFindingDiscussionComments?.(repository, pullRequest.number)) ?? [],
-    { authorLogins: pullRequest.user?.login === undefined ? [] : [pullRequest.user.login] },
-  );
   return {
     credentialProfiles: io.credentialProfiles ?? { default: { type: "env" as const } },
     executeRole: io.executeRole,
     verificationAdapter: actionVerificationAdapter(env, io.verificationAdapter),
     persistence,
-    findingDispositions: effects.dispositions,
-    resolvedFingerprints: effects.resolvedFingerprints,
-    reassessedFingerprints: effects.reassessedFingerprints,
-    findingDiscussionEvents: effects.events,
+    ...findingCommandDependencies(request),
   };
 }
 
@@ -240,9 +261,77 @@ export async function runAction(
       "The workflow dispatch is not backed by an accepted Review request.",
     );
   }
+  let findingPublicationComplete = false;
   try {
-    const diff = await io.readDiff(pullRequest.base.sha, pullRequest.head.sha);
     const policyContents = await io.readPolicy(pullRequest.base.sha, PROJECT_POLICY_PATH);
+    if (request !== undefined && request.workType === "finding_discussion") {
+      const policy = parseProjectPolicy(policyContents);
+      if (
+        !policy.valid ||
+        persistence === undefined ||
+        request.findingFingerprint === undefined ||
+        request.rootCommentId === undefined ||
+        request.command === "review"
+      ) {
+        return unsafeContextOutcome(
+          io,
+          "policy_skip",
+          policy.valid
+            ? "The accepted Finding command is missing durable dispatch context."
+            : policy.reason,
+        );
+      }
+      const result = await runFindingDiscussionWork(
+        {
+          repository: repository.full_name,
+          pullRequestNumber: pullRequest.number,
+          baseSha: pullRequest.base.sha,
+          headSha: pullRequest.head.sha,
+          eventId: request.eventId,
+          workflowRunId: request.workflowRunId,
+          command: request.command,
+          fingerprint: request.findingFingerprint,
+          context: request.findingContext,
+          policy: policy.policy,
+          policySource: {
+            type: "trusted_base_branch",
+            revision: pullRequest.base.sha,
+            path: PROJECT_POLICY_PATH,
+          },
+          trust,
+        },
+        {
+          persistence,
+          verificationAdapter: actionVerificationAdapter(env, io.verificationAdapter),
+          credentialProfiles: io.credentialProfiles ?? { default: { type: "env" as const } },
+          executeRole: io.executeRole,
+        },
+      );
+      if (!(await actionReviewRequestIsActive(event, persistence, request))) {
+        await recordNotAttemptedPublication(io, result.outcome);
+        throw new Error("The Finding command was superseded before publication.");
+      }
+      await publishFindingDiscussionActionOutcome(
+        io,
+        repository.full_name,
+        pullRequest.number,
+        request.eventId,
+        result.outcome,
+        {
+          repository: repository.full_name,
+          pullRequestNumber: pullRequest.number,
+          headSha: pullRequest.head.sha,
+          rootCommentId: request.rootCommentId,
+          lifecycleState: result.lifecycleState,
+          body: result.replyBody,
+          effectMarker: `<!-- diffowl:finding-update:v1 event=${request.eventId} fingerprint=${request.findingFingerprint} root=${request.rootCommentId} -->`,
+        },
+        persistence,
+      );
+      findingPublicationComplete = true;
+      return result.outcome;
+    }
+    const diff = await io.readDiff(pullRequest.base.sha, pullRequest.head.sha);
     const outcome = await runReview(
       {
         repository: repository.full_name,
@@ -260,7 +349,7 @@ export async function runAction(
           contents: policyContents,
         },
       },
-      await reviewDependencies(env, io, repository.full_name, pullRequest, persistence),
+      reviewDependencies(env, io, persistence, request),
     );
 
     if (!(await actionReviewRequestIsActive(event, persistence, request))) {
@@ -277,6 +366,10 @@ export async function runAction(
     );
     return outcome;
   } finally {
-    await completeActionReviewRequest(event, persistence, request);
+    if (request === undefined || request.workType !== "finding_discussion") {
+      await completeActionReviewRequest(event, persistence, request);
+    } else if (findingPublicationComplete) {
+      await completeActionReviewRequest(event, persistence, request);
+    }
   }
 }

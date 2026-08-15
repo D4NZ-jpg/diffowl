@@ -1,5 +1,7 @@
 import { type GitHubPullRequestEvent, isPullRequestEvent } from "./action-event.js";
 import type { ReviewPersistenceStore } from "./persistence.js";
+import { loadReviewRequestEvent } from "./review-request-lifecycle.js";
+import { routedCommandContext, type ReviewRequestEventRecord } from "./review-request-state.js";
 import {
   claimReviewRequest,
   completeReviewRequest,
@@ -137,8 +139,14 @@ export async function resolveActionEvent(
 export interface ClaimedReviewRequest {
   eventId: string;
   workflowRunId: string;
+  command: ReviewRequestEventRecord["command"];
+  workType: "full_review" | "finding_discussion";
+  findingFingerprint?: string | undefined;
+  findingContext?: string | undefined;
+  rootCommentId?: string | undefined;
 }
 
+// oxlint-disable-next-line complexity
 export async function claimActionReviewRequest(
   env: NodeJS.ProcessEnv,
   event: GitHubPullRequestEvent,
@@ -157,14 +165,22 @@ export async function claimActionReviewRequest(
     return false;
   }
   const pullRequest = event.pull_request;
+  const key = { repository: event.repository.full_name, pullRequestNumber: pullRequest.number };
   const accepted = await claimReviewRequest(
     persistence,
-    { repository: event.repository.full_name, pullRequestNumber: pullRequest.number },
+    key,
     eventId,
     pullRequest.head.sha,
     workflowRunId,
   );
-  return accepted ? { eventId, workflowRunId } : false;
+  if (!accepted) return false;
+  const record = await loadReviewRequestEvent(persistence, key, eventId);
+  if (record === undefined) return false;
+  return {
+    eventId,
+    workflowRunId,
+    ...routedCommandContext(record),
+  };
 }
 
 export async function actionReviewRequestIsActive(

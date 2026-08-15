@@ -16,6 +16,8 @@ export interface LedgerFindingSnapshot {
   fingerprint: string;
   summary: string;
   locationPath?: string | undefined;
+  locationLine?: number | undefined;
+  reviewedHeadSha?: string | undefined;
 }
 
 export interface FindingLedgerEntry extends LedgerFindingSnapshot {
@@ -68,15 +70,30 @@ function currentSnapshot(
     fingerprint: snapshot.fingerprint,
     summary: snapshot.summary || entry?.summary || "",
     locationPath: snapshot.locationPath ?? entry?.locationPath,
+    locationLine: snapshot.locationLine ?? entry?.locationLine,
+    reviewedHeadSha: snapshot.reviewedHeadSha ?? entry?.reviewedHeadSha,
   };
 }
 
-function manuallyDisposed(state: FindingLifecycleState): state is FindingDispositionState {
-  return state === "accepted" || state === "rebutted" || state === "suppressed";
+function disposedMaterialState(
+  previous: FindingLedgerEntry,
+  current: LedgerFindingSnapshot,
+  reassessing: boolean,
+): FindingLifecycleState | undefined {
+  if (previous.lifecycleState === "accepted") return reassessing ? "persisting" : "accepted";
+  if (previous.lifecycleState !== "rebutted" && previous.lifecycleState !== "suppressed") {
+    return undefined;
+  }
+  const newerReviewedHead =
+    previous.reviewedHeadSha !== undefined &&
+    current.reviewedHeadSha !== undefined &&
+    previous.reviewedHeadSha !== current.reviewedHeadSha;
+  return reassessing || newerReviewedHead ? "persisting" : previous.lifecycleState;
 }
 
 function observedMaterialState(
   previous: FindingLedgerEntry | undefined,
+  current: LedgerFindingSnapshot,
   disposition: FindingDispositionState | undefined,
   reassessing: boolean,
 ): FindingLifecycleState {
@@ -88,10 +105,7 @@ function observedMaterialState(
   ) {
     return "new";
   }
-  if (manuallyDisposed(previous.lifecycleState)) {
-    return reassessing ? "persisting" : previous.lifecycleState;
-  }
-  return "persisting";
+  return disposedMaterialState(previous, current, reassessing) ?? "persisting";
 }
 
 function observedSuppressedState(
@@ -217,6 +231,7 @@ export function reconcileFindingLedger(input: FindingLedgerReconciliationInput):
     const prior = previous.get(fingerprint);
     const state = observedMaterialState(
       prior,
+      snapshot,
       input.dispositions?.[fingerprint],
       reassessments.has(fingerprint),
     );
@@ -264,6 +279,9 @@ function parseEntry(value: unknown): FindingLedgerEntry {
     value.fingerprint.length === 0 ||
     typeof value.summary !== "string" ||
     !optionalString(value.locationPath) ||
+    (value.locationLine !== undefined &&
+      (!Number.isInteger(value.locationLine) || Number(value.locationLine) <= 0)) ||
+    !optionalString(value.reviewedHeadSha) ||
     !lifecycleStates.has(value.lifecycleState as FindingLifecycleState) ||
     typeof value.firstSeenRunId !== "string" ||
     value.firstSeenRunId.length === 0 ||

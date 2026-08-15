@@ -133,11 +133,12 @@ it("installs a trusted issue-comment router and one canonical review workflow", 
   ]);
 
   expect(router).toContain("issue_comment:");
+  expect(router).toContain("pull_request_review_comment:");
   expect(router).toContain("types: [created]");
   expect(router).toContain("ref: ${{ github.event.repository.default_branch }}");
   expect(router).toContain("actions: write");
   expect(router).toContain("contents: write");
-  expect(router).toContain("pull-requests: read");
+  expect(router).toContain("pull-requests: write");
   expect(router).toContain("issues: write");
   expect(router).toContain("persist-credentials: false");
   expect(router).toContain("uses: D4NZ-jpg/diffowl/review-request@main");
@@ -146,6 +147,10 @@ it("installs a trusted issue-comment router and one canonical review workflow", 
 
   expect(review).toContain("workflow_dispatch:");
   expect(review).toContain("review-request-event-id:");
+  expect(review).toContain("command-work-type:");
+  expect(review).toContain("finding-fingerprint:");
+  expect(review).toContain("finding-context:");
+  expect(review).toContain("finding-root-comment-id:");
   expect(review).toContain("ref: ${{ inputs.head-sha || github.event.pull_request.head.sha }}");
   expect(review).toContain("persist-credentials: false");
   expect(review).toContain("issues: read");

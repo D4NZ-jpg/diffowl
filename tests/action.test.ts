@@ -6,16 +6,19 @@ import { afterEach, expect, it } from "vitest";
 
 import { publishActionOutcome } from "../src/action-publication.js";
 import { createActionIo, runAction } from "../src/action.js";
+import { findingIdentityMarker } from "../src/finding-discussion.js";
 import { actionExitCodeForOutcome } from "../src/action-readiness.js";
 import {
   IncompletePublicationError,
   PublicationRefusalError,
+  type GitHubRequest,
   type PublicationAuthorization,
+  publishReviewOutcome,
 } from "../src/github-publication.js";
 import {
+  type CandidateDraft,
   FileSystemReviewPersistenceStore,
   GitReviewPersistenceStore,
-  findingIdentityMarker,
   type RoleExecutionRequest,
 } from "../src/review-engine.js";
 import { persistedRunCount, temporaryStateDirectories } from "./persistence-fixtures.js";
@@ -90,28 +93,11 @@ async function validationAttemptsForRunner(
   return verifierInput?.validationAttempts;
 }
 
-function materialRoleResult(request: RoleExecutionRequest) {
+function materialRoleResults(request: RoleExecutionRequest, candidateFindings: CandidateDraft[]) {
   if (request.step.role === "reviewer") {
     return {
       type: "completed" as const,
-      output: {
-        role: "reviewer" as const,
-        candidateFindings: [
-          {
-            summary: "Public greeting can be empty",
-            location: { path: "src/message.ts", line: 1 },
-            impact: "Callers receive an invalid response.",
-            evidence: ["return greeting ?? ''"],
-            fingerprintContext: {
-              claimKind: "invalid-return",
-              affectedArea: "greeting API",
-              policyOrCapability: "runtime correctness",
-              symbol: "greeting",
-            },
-          },
-        ],
-        advisorySuggestions: [],
-      },
+      output: { role: "reviewer" as const, candidateFindings, advisorySuggestions: [] },
       artifact: roleArtifact("reviewer"),
     };
   }
@@ -120,12 +106,57 @@ function materialRoleResult(request: RoleExecutionRequest) {
       type: "completed" as const,
       output: {
         role: "challenger" as const,
-        assessments: [{ candidateIndex: 0, verdict: "support" as const, reason: "supported" }],
+        assessments: candidateFindings.map((_finding, candidateIndex) => ({
+          candidateIndex,
+          verdict: "support" as const,
+          reason: "supported",
+        })),
       },
       artifact: roleArtifact("challenger"),
     };
   }
-  return verifierResult([materialAssessment(["scoped-diff"], "verified")]);
+  return verifierResult(
+    candidateFindings.map((_finding, candidateIndex) => ({
+      ...materialAssessment(["scoped-diff"], "verified"),
+      candidateIndex,
+    })),
+  );
+}
+
+function materialRoleResult(request: RoleExecutionRequest) {
+  return materialRoleResults(request, [
+    {
+      summary: "Public greeting can be empty",
+      location: { path: "src/message.ts", line: 1 },
+      impact: "Callers receive an invalid response.",
+      evidence: ["return greeting ?? ''"],
+      fingerprintContext: {
+        claimKind: "invalid-return",
+        affectedArea: "greeting API",
+        policyOrCapability: "runtime correctness",
+        symbol: "greeting",
+      },
+    },
+  ]);
+}
+
+function twoFindingRoleResult(request: RoleExecutionRequest) {
+  return materialRoleResults(request, [
+    {
+      summary: "First material problem",
+      location: { path: "src/message.ts", line: 1 },
+      impact: "First impact.",
+      evidence: ["first evidence"],
+      fingerprintContext: { claimKind: "first-problem", symbol: "message" },
+    },
+    {
+      summary: "Second material problem",
+      location: { path: "src/message.ts", line: 1 },
+      impact: "Second impact.",
+      evidence: ["second evidence"],
+      fingerprintContext: { claimKind: "second-problem", symbol: "message" },
+    },
+  ]);
 }
 
 function capturingActionIo(outputs: Map<string, string>) {
@@ -284,28 +315,99 @@ it("persists Action runs and publishes safe run outputs", async () => {
   expect(await persistedRunCount(stateDirectory)).toBe(2);
 });
 
-it("applies author Finding discussion replies from the Action adapter", async () => {
+it("does not rescan historical Finding discussion comments during an ordinary Review", async () => {
   const stateDirectory = await stateDirectories.create();
   const event = JSON.stringify(pullRequestEvent({ actor: "author" }));
-  let fingerprint = "";
-  const baseIo = {
+  const actionIo = {
     readFile: async () => event,
     readDiff: async () => representativeDiff,
     readPolicy: async () => representativePolicy,
     setOutput: async () => undefined,
+    executeRole: async (request: RoleExecutionRequest) => emptyRoleResult(request),
+    listFindingDiscussionComments: async () => {
+      throw new Error("ordinary Review must not rescan historical comments");
+    },
   };
 
+  await expect(
+    runAction(
+      {
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: eventPath,
+        INPUT_STATE_DIRECTORY: stateDirectory,
+      },
+      actionIo,
+    ),
+  ).resolves.toMatchObject({ type: "clean" });
+});
+
+// oxlint-disable-next-line max-lines-per-function
+it("publishes one visible disposition per Finding transition in the same Action run", async () => {
+  const stateDirectory = await stateDirectories.create();
+  const baseIo = {
+    readFile,
+    readDiff: async () => representativeDiff,
+    readPolicy: async () => representativePolicy,
+    setOutput: async () => undefined,
+  };
   const first = await runAction(
     {
       GITHUB_EVENT_NAME: "pull_request",
       GITHUB_EVENT_PATH: eventPath,
       INPUT_STATE_DIRECTORY: stateDirectory,
     },
-    { ...baseIo, executeRole: async (request) => materialRoleResult(request) },
+    { ...baseIo, executeRole: async (request) => twoFindingRoleResult(request) },
   );
-  fingerprint = first.type === "findings" ? first.materialFindings[0].fingerprint.value : "";
+  expect(first.type).toBe("findings");
+  const fingerprints =
+    first.type === "findings"
+      ? first.materialFindings.map((finding) => finding.fingerprint.value)
+      : [];
+  const roots = fingerprints.map((fingerprint, index) => ({
+    id: 10 + index,
+    body: `${findingIdentityMarker(fingerprint)}\n### Review OWL material Finding`,
+    user: { login: "github-actions[bot]", type: "Bot" },
+  }));
+  const requests: GitHubRequest[] = [];
+  const transport = async (request: GitHubRequest): Promise<unknown> => {
+    requests.push(request);
+    if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+      return { head: { sha: reviewedPullRequest.headSha } };
+    }
+    if (request.method === "GET" && request.path === "/user") {
+      return { login: "github-actions[bot]" };
+    }
+    if (request.method === "GET" && request.path.includes("/pulls/42/comments")) return roots;
+    if (request.path === "/graphql" && JSON.stringify(request.body).includes("reviewThreads")) {
+      return {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: roots.map((root, index) => ({
+                  id: `thread-${index}`,
+                  isResolved: false,
+                  comments: { nodes: [{ databaseId: root.id }] },
+                })),
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        },
+      };
+    }
+    if (request.path === "/graphql") {
+      const threadId = String(
+        (request.body as { variables: { threadId: string } }).variables.threadId,
+      );
+      return {
+        data: { resolveReviewThread: { thread: { id: threadId, isResolved: true } } },
+      };
+    }
+    return {};
+  };
 
-  const second = await runAction(
+  await runAction(
     {
       GITHUB_EVENT_NAME: "pull_request",
       GITHUB_EVENT_PATH: eventPath,
@@ -313,28 +415,18 @@ it("applies author Finding discussion replies from the Action adapter", async ()
     },
     {
       ...baseIo,
-      listFindingDiscussionComments: async () => [
-        {
-          id: 10,
-          actor: "author",
-          body: "/review-owl resolved fixed in latest push",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          threadBody: findingIdentityMarker(fingerprint),
-        },
-        {
-          id: 11,
-          actor: "reviewer",
-          body: "/review-owl rebut not fixed",
-          createdAt: "2026-01-01T00:00:01.000Z",
-          threadBody: findingIdentityMarker(fingerprint),
-        },
-      ],
       executeRole: async (request) => emptyRoleResult(request),
+      publishOutcome: (target, outcome, authorization) =>
+        publishReviewOutcome(transport, target, outcome, authorization),
     },
   );
 
-  expect(second.run?.ledgerTransitions).toEqual([
-    expect.objectContaining({ fingerprint, lifecycleState: "resolved" }),
+  const replies = requests.filter((request) => request.path.endsWith("/replies"));
+  expect(requests.some((request) => request.path === "/user")).toBe(false);
+  expect(replies).toHaveLength(2);
+  expect(replies.map((request) => JSON.stringify(request.body))).toEqual([
+    expect.stringContaining(`fingerprint=${fingerprints[0]} root=10`),
+    expect.stringContaining(`fingerprint=${fingerprints[1]} root=11`),
   ]);
 });
 

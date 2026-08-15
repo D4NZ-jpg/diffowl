@@ -1,19 +1,30 @@
+/* oxlint-disable max-lines */
+import type { FindingDiscussionEvent } from "./finding-discussion.js";
 import type { PullRequestPersistenceKey, ReviewPersistenceStore } from "./persistence.js";
 import {
   emptyReviewRequestLedger,
   type ReviewRequestEventRecord,
   type ReviewRequestLedger,
   type ReviewRequestRecord,
+  type RoutedCommand,
+  type CommandWorkType,
 } from "./review-request-state.js";
 
 export interface ReviewRequestDecisionInput {
   eventId: string;
   actor: string;
+  command?: RoutedCommand | undefined;
   deprecatedAlias: boolean;
   observedAt: string;
   headSha: string;
   cooldownSeconds: number;
   requestTimeoutSeconds: number;
+  workType?: CommandWorkType | undefined;
+  findingFingerprint?: string | undefined;
+  findingContext?: string | undefined;
+  rootCommentId?: string | undefined;
+  reviewedHeadSha?: string | undefined;
+  discussionEvent?: FindingDiscussionEvent | undefined;
   reason?: string | undefined;
 }
 
@@ -21,21 +32,33 @@ function baseEventRecord(input: ReviewRequestDecisionInput) {
   return {
     eventId: input.eventId,
     actor: input.actor,
-    command: "review" as const,
+    command: input.command ?? ("review" as const),
     deprecatedAlias: input.deprecatedAlias,
     observedAt: input.observedAt,
     headSha: input.headSha,
+    ...(input.workType === undefined ? {} : { workType: input.workType }),
+    ...(input.findingFingerprint === undefined
+      ? {}
+      : { findingFingerprint: input.findingFingerprint }),
+    ...(input.findingContext === undefined ? {} : { findingContext: input.findingContext }),
+    ...(input.rootCommentId === undefined ? {} : { rootCommentId: input.rootCommentId }),
+    ...(input.reviewedHeadSha === undefined ? {} : { reviewedHeadSha: input.reviewedHeadSha }),
   };
+}
+
+function openReviewRequest(ledger: ReviewRequestLedger, request: ReviewRequestRecord): boolean {
+  const open = request.status === "queued" || request.status === "active";
+  return open && ledger.events[request.requestId]?.command === "review";
 }
 
 function coalescibleRequest(
   ledger: ReviewRequestLedger,
   input: ReviewRequestDecisionInput,
 ): ReviewRequestRecord | undefined {
+  if ((input.command ?? "review") !== "review") return undefined;
   const observedAt = Date.parse(input.observedAt);
   for (const [requestId, request] of Object.entries(ledger.requests)) {
-    const open = request.status === "queued" || request.status === "active";
-    if (request.headSha !== input.headSha || !open) continue;
+    if (request.headSha !== input.headSha || !openReviewRequest(ledger, request)) continue;
     const startedAt = Date.parse(
       request.status === "active" ? request.activatedAt! : request.requestedAt,
     );
@@ -67,28 +90,66 @@ function newerRevisionExists(
   });
 }
 
-function lastCompletion(ledger: ReviewRequestLedger, headSha: string): number {
+function sameFindingTarget(
+  event: ReviewRequestEventRecord | undefined,
+  input: ReviewRequestDecisionInput,
+): boolean {
+  return (
+    (input.command ?? "review") !== "review" &&
+    event?.command !== "review" &&
+    event?.headSha === input.headSha &&
+    event?.findingFingerprint === input.findingFingerprint
+  );
+}
+
+function newerFindingCommandExists(
+  ledger: ReviewRequestLedger,
+  input: ReviewRequestDecisionInput,
+): boolean {
+  if ((input.command ?? "review") === "review") return false;
+  const observedAt = Date.parse(input.observedAt);
+  return Object.values(ledger.events).some((event) => {
+    if (!sameFindingTarget(event, input) || event.decision === "refuse") return false;
+    const existingObservedAt = Date.parse(event.observedAt);
+    if (existingObservedAt !== observedAt) return existingObservedAt > observedAt;
+    return compareEventIds(event.eventId, input.eventId) > 0;
+  });
+}
+
+function lastCompletion(ledger: ReviewRequestLedger, input: ReviewRequestDecisionInput): number {
+  const command = input.command ?? "review";
   const completed = Object.values(ledger.requests)
-    .filter(
-      (request) =>
-        request.headSha === headSha &&
+    .filter((request) => {
+      const event = ledger.events[request.requestId];
+      return (
+        request.headSha === input.headSha &&
+        event?.command === command &&
+        (command === "review" || event?.findingFingerprint === input.findingFingerprint) &&
         request.status === "terminal" &&
-        request.completedAt !== undefined,
-    )
+        request.completedAt !== undefined
+      );
+    })
     .map((request) => Date.parse(request.completedAt!))
     .filter(Number.isFinite);
   return completed.length === 0 ? 0 : Math.max(...completed);
 }
 
-function supersedeOpenRequests(ledger: ReviewRequestLedger, headSha: string): void {
+function supersedeOpenRequests(
+  ledger: ReviewRequestLedger,
+  input: ReviewRequestDecisionInput,
+): void {
   for (const [requestId, request] of Object.entries(ledger.requests)) {
     const open = request.status === "queued" || request.status === "active";
-    if (request.headSha !== headSha && open) {
+    if (!open) continue;
+    const differentRevision = request.headSha !== input.headSha;
+    const sameTarget = sameFindingTarget(ledger.events[requestId], input);
+    if (differentRevision || sameTarget) {
       ledger.requests[requestId] = { ...request, status: "superseded" };
     }
   }
 }
 
+// oxlint-disable-next-line max-lines-per-function
 function decideReviewRequest(
   ledger: ReviewRequestLedger,
   input: ReviewRequestDecisionInput,
@@ -107,6 +168,15 @@ function decideReviewRequest(
       },
     };
   }
+  if (newerFindingCommandExists(ledger, input)) {
+    return {
+      event: {
+        ...baseEventRecord(input),
+        decision: "refuse",
+        reason: "A newer command superseded this Finding discussion request.",
+      },
+    };
+  }
   const active = coalescibleRequest(ledger, input);
   if (active !== undefined) {
     return {
@@ -117,7 +187,7 @@ function decideReviewRequest(
       },
     };
   }
-  const completedAt = lastCompletion(ledger, input.headSha);
+  const completedAt = lastCompletion(ledger, input);
   if (
     completedAt > 0 &&
     Date.parse(input.observedAt) < completedAt + input.cooldownSeconds * 1_000
@@ -130,7 +200,7 @@ function decideReviewRequest(
       },
     };
   }
-  supersedeOpenRequests(ledger, input.headSha);
+  supersedeOpenRequests(ledger, input);
   const request: ReviewRequestRecord = {
     requestId: input.eventId,
     headSha: input.headSha,
@@ -152,6 +222,8 @@ export async function persistReviewRequestDecision(
   key: PullRequestPersistenceKey,
   input: ReviewRequestDecisionInput,
 ): Promise<ReviewRequestEventRecord> {
+  // The transaction atomically records command routing and its Finding discussion event.
+  // oxlint-disable-next-line complexity
   return persistence.withTransaction(key, async (transaction) => {
     const ledger = (await transaction.loadReviewRequests()) ?? emptyReviewRequestLedger();
     const previous = ledger.events[input.eventId];
@@ -160,6 +232,20 @@ export async function persistReviewRequestDecision(
     ledger.events[input.eventId] = decision.event;
     if (decision.request !== undefined) {
       ledger.requests[decision.request.requestId] = decision.request;
+    }
+    if (input.discussionEvent !== undefined && decision.event.decision !== "refuse") {
+      const findingLedger = await transaction.loadLedger();
+      const entry = findingLedger?.entries.find(
+        (candidate) => candidate.fingerprint === input.discussionEvent!.fingerprint,
+      );
+      if (findingLedger === undefined || entry === undefined) {
+        throw new Error("The Finding command target is not present in durable state.");
+      }
+      const discussion = entry.discussion ?? [];
+      if (!discussion.some((event) => event.id === input.discussionEvent!.id)) {
+        entry.discussion = [...discussion, input.discussionEvent];
+        await transaction.saveLedger(findingLedger);
+      }
     }
     await transaction.saveReviewRequests(ledger);
     return decision.event;
@@ -175,6 +261,18 @@ export async function loadReviewRequestEvent(
     const ledger = (await transaction.loadReviewRequests()) ?? emptyReviewRequestLedger();
     return ledger.events[eventId];
   });
+}
+
+export async function resolveDispatchRecord(
+  persistence: ReviewPersistenceStore,
+  key: PullRequestPersistenceKey,
+  record: ReviewRequestEventRecord,
+): Promise<ReviewRequestEventRecord | undefined> {
+  return record.decision === "dispatch"
+    ? record
+    : record.requestId === undefined
+      ? undefined
+      : loadReviewRequestEvent(persistence, key, record.requestId);
 }
 
 export async function saveReviewRequestEffect(

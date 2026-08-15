@@ -1,6 +1,11 @@
 /* oxlint-disable max-lines */
 import { canonicalJsonHash } from "./canonical-json.js";
-import type { MaterialFinding } from "./review-engine.js";
+import {
+  publishFindingDiscussionUpdate,
+  type FindingDiscussionPublicationReceipt,
+  type FindingDiscussionPublicationUpdate,
+} from "./github-finding-command.js";
+import type { MaterialFinding, ReviewOutcome } from "./review-engine.js";
 import {
   GITHUB_BODY_LIMIT,
   findingBody,
@@ -60,6 +65,7 @@ export interface PublicationReceipt {
   reviewUrl?: string;
   reviewCreated?: boolean;
   reviewEffectId?: string;
+  findingDiscussionEffects?: FindingDiscussionPublicationReceipt[] | undefined;
   inlineCommentCount: number;
   unanchoredFindingCount: number;
   reason?: string;
@@ -70,6 +76,10 @@ interface ReviewReceipt {
   htmlUrl?: string;
 }
 type InlineFinding = MaterialFinding & { location: { path: string; line: number } };
+interface ExistingFindingRoot {
+  fingerprint: string;
+  rootCommentId: string;
+}
 
 function asRecord(value: unknown, context: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value))
@@ -98,6 +108,98 @@ function inlineFinding(finding: MaterialFinding, lines: Set<string>): finding is
     lines.has(`${finding.location.path}\0${finding.location.line}`)
   );
 }
+function findingFingerprintFromBody(body: unknown): string | undefined {
+  if (typeof body !== "string") return undefined;
+  return /<!-- diffowl:finding:v1 fingerprint=(sha256:[\da-f]{64}) -->/iu
+    .exec(body)?.[1]
+    ?.toLowerCase();
+}
+
+async function existingFindingRoots(
+  request: GitHubTransport,
+  target: PublicationTarget,
+): Promise<Map<string, ExistingFindingRoot>> {
+  const roots = new Map<string, ExistingFindingRoot>();
+  for (let page = 1; page <= 10; page += 1) {
+    // Review-comment pagination is bounded by the first short page.
+    // oxlint-disable-next-line no-await-in-loop
+    const response = await request({
+      method: "GET",
+      path: `/repos/${target.repository}/pulls/${target.pullRequestNumber}/comments?per_page=100&page=${page}`,
+    });
+    if (!Array.isArray(response)) throw new Error("GitHub review comments response was invalid.");
+    for (const value of response) {
+      const comment = asRecord(value, "GitHub review comment response");
+      if (comment.in_reply_to_id !== undefined) continue;
+      const author = asRecord(comment.user, "GitHub review comment author");
+      if (author.type !== "Bot" || author.login !== "github-actions[bot]") continue;
+      const fingerprint = findingFingerprintFromBody(comment.body);
+      if (fingerprint === undefined) continue;
+      roots.set(fingerprint, {
+        fingerprint,
+        rootCommentId: String(numericId(comment, "GitHub review comment response")),
+      });
+    }
+    if (response.length < 100) return roots;
+  }
+  throw new PublicationRefusalError(
+    "Unable to reconcile Finding roots within 1,000 review comments.",
+  );
+}
+
+// oxlint-disable-next-line complexity
+function lifecycleUpdates(
+  outcome: ReviewOutcome,
+  roots: ReadonlyMap<string, ExistingFindingRoot>,
+  target: PublicationTarget,
+): FindingDiscussionPublicationUpdate[] {
+  if (outcome.run === undefined) return [];
+  const transitions = new Map(
+    outcome.run.outcome.ledgerTransitions?.map((transition) => [
+      transition.fingerprint,
+      transition,
+    ]),
+  );
+  const current = new Map(
+    materialFindings(outcome).map((finding) => [finding.fingerprint.value, finding]),
+  );
+  const updates: FindingDiscussionPublicationUpdate[] = [];
+  for (const [fingerprint, root] of roots) {
+    const finding = current.get(fingerprint);
+    const transition = transitions.get(fingerprint);
+    const continuing = finding !== undefined && isActiveFinding(finding);
+    if (!continuing && transition?.changed !== true) continue;
+    const lifecycleState = transition?.lifecycleState ?? finding!.lifecycleState;
+    const effectMarker = `<!-- diffowl:finding-update:v1 run=${outcome.run.runId} fingerprint=${fingerprint} root=${root.rootCommentId} -->`;
+    updates.push({
+      repository: target.repository,
+      pullRequestNumber: target.pullRequestNumber,
+      headSha: target.headSha,
+      rootCommentId: root.rootCommentId,
+      lifecycleState,
+      body: [
+        `Review OWL continued this Finding at \`${target.headSha}\`.`,
+        "",
+        `Disposition: **${lifecycleState}**.`,
+        "The original claim, evidence, replies, reassessments, and patch history remain in this discussion.",
+      ].join("\n"),
+      effectMarker,
+      ...(finding !== undefined && continuing && inlineFinding(finding, changedLineKeys(target))
+        ? {
+            replacement: {
+              fingerprint,
+              headSha: target.headSha,
+              path: finding.location.path,
+              line: finding.location.line,
+              body: findingBody(finding),
+            },
+          }
+        : {}),
+    });
+  }
+  return updates;
+}
+
 function reviewBody(unanchored: MaterialFinding[]): string {
   const lines = ["Review OWL found material Findings. Use these review threads for discussion."];
   if (unanchored.length > 0) {
@@ -127,20 +229,13 @@ function reviewEffectMarker(effectId: string): string {
   return `<!-- diffowl-publication-effect:${effectId} -->`;
 }
 
-async function authenticatedLogin(request: GitHubTransport): Promise<string> {
-  const user = asRecord(await request({ method: "GET", path: "/user" }), "GitHub user response");
-  if (typeof user.login !== "string") throw new Error("GitHub user response had no login.");
-  return user.login;
-}
-
 async function findPublishedReview(
   request: GitHubTransport,
   target: PublicationTarget,
   effectId: string,
   expectedBody: string,
 ): Promise<ReviewReceipt | undefined> {
-  const login = await authenticatedLogin(request);
-  for (let page = 1; ; page += 1) {
+  for (let page = 1; page <= 10; page += 1) {
     // GitHub review pagination is bounded by the first short page.
     // oxlint-disable-next-line no-await-in-loop
     const response = await request({
@@ -152,9 +247,10 @@ async function findPublishedReview(
       const review = asRecord(value, "GitHub review response");
       const author = asRecord(review.user, "GitHub review author");
       if (
+        author.type !== "Bot" ||
+        author.login !== "github-actions[bot]" ||
         review.body !== expectedBody ||
-        review.commit_id !== target.headSha ||
-        author.login !== login
+        review.commit_id !== target.headSha
       ) {
         continue;
       }
@@ -166,6 +262,7 @@ async function findPublishedReview(
     }
     if (response.length < 100) return undefined;
   }
+  throw new Error("Unable to reconcile a pull-request review within 1,000 reviews.");
 }
 
 // oxlint-disable-next-line complexity, max-lines-per-function
@@ -269,7 +366,7 @@ async function assertCurrentHead(
     throw new PublicationRefusalError();
 }
 
-// oxlint-disable-next-line complexity
+// oxlint-disable-next-line complexity, max-lines-per-function
 export async function publishReviewOutcome(
   request: GitHubTransport,
   target: PublicationTarget,
@@ -283,29 +380,75 @@ export async function publishReviewOutcome(
     (await readCurrentHead(request, target)) === target.headSha,
   );
   await authorization?.claimAuthority?.();
+  const roots = await existingFindingRoots(request, target);
   const active = materialFindings(validated).filter(isActiveFinding);
   const lines = changedLineKeys(target);
-  const inline = active.filter((finding) => inlineFinding(finding, lines));
-  const unanchored = active.filter((finding) => !inlineFinding(finding, lines));
-  await assertCurrentHead(request, target);
-  const review = await publishReview(
-    request,
-    target,
-    inline,
-    unanchored,
-    authorization?.reserveEffect,
+  const inline = active.filter(
+    (finding): finding is InlineFinding =>
+      inlineFinding(finding, lines) && !roots.has(finding.fingerprint.value),
   );
+  const unanchored = active.filter(
+    (finding) => !inlineFinding(finding, lines) && !roots.has(finding.fingerprint.value),
+  );
+  await assertCurrentHead(request, target);
+  const findingDiscussionEffects: FindingDiscussionPublicationReceipt[] = [];
+  for (const update of lifecycleUpdates(validated, roots, target)) {
+    // Finding discussion projections are bounded to persisted Findings.
+    // oxlint-disable-next-line no-await-in-loop
+    const discussion = await publishFindingDiscussionUpdate(request, update);
+    findingDiscussionEffects.push(discussion);
+    if (discussion.result !== "complete") {
+      const reason = discussion.reason ?? "Finding discussion publication was incomplete.";
+      throw new IncompletePublicationError(reason, {
+        result: "incomplete",
+        headSha: target.headSha,
+        findingDiscussionEffects,
+        inlineCommentCount: 0,
+        unanchoredFindingCount: 0,
+        reason,
+      });
+    }
+  }
+  let review: ReviewReceipt | undefined;
+  try {
+    review = await publishReview(request, target, inline, unanchored, authorization?.reserveEffect);
+  } catch (error) {
+    if (findingDiscussionEffects.length === 0) throw error;
+    const message = error instanceof Error ? error.message : "GitHub publication failed.";
+    const confirmed =
+      error instanceof IncompletePublicationError
+        ? error.confirmedEffects
+        : {
+            result: "incomplete" as const,
+            headSha: target.headSha,
+            inlineCommentCount: 0,
+            unanchoredFindingCount: 0,
+            reason: message,
+          };
+    throw new IncompletePublicationError(message, {
+      ...confirmed,
+      result: "incomplete",
+      headSha: target.headSha,
+      findingDiscussionEffects,
+      reason: message,
+    });
+  }
   try {
     await assertCurrentHead(request, target);
   } catch (error) {
-    if (review === undefined) throw error;
+    if (review === undefined && findingDiscussionEffects.length === 0) throw error;
     const message = error instanceof Error ? error.message : "GitHub publication failed.";
     throw new IncompletePublicationError(message, {
       result: "incomplete",
       headSha: target.headSha,
-      reviewId: review.id,
-      reviewEffectId: review.effectId,
-      ...(review.htmlUrl === undefined ? {} : { reviewUrl: review.htmlUrl }),
+      ...(review === undefined
+        ? {}
+        : {
+            reviewId: review.id,
+            reviewEffectId: review.effectId,
+            ...(review.htmlUrl === undefined ? {} : { reviewUrl: review.htmlUrl }),
+          }),
+      ...(findingDiscussionEffects.length === 0 ? {} : { findingDiscussionEffects }),
       inlineCommentCount: inline.length,
       unanchoredFindingCount: unanchored.length,
       reason: message,
@@ -316,6 +459,7 @@ export async function publishReviewOutcome(
     headSha: target.headSha,
     ...(review === undefined ? {} : { reviewId: review.id, reviewEffectId: review.effectId }),
     ...(review?.htmlUrl === undefined ? {} : { reviewUrl: review.htmlUrl }),
+    ...(findingDiscussionEffects.length === 0 ? {} : { findingDiscussionEffects }),
     inlineCommentCount: inline.length,
     unanchoredFindingCount: unanchored.length,
   };

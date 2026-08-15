@@ -19,7 +19,7 @@ function comment(body: string, id = 1) {
 
 it("recognizes audited lifecycle commands from Review OWL threads", () => {
   const effects = recognizeFindingDiscussionCommands([
-    comment("/review-owl accept\nI will fix this in a follow-up."),
+    comment("/review-owl accept I will fix this in a follow-up."),
     comment("/diffowl reassess The API is only reachable by admins.", 2),
     comment("/review-owl explain", 3),
   ]);
@@ -87,4 +87,24 @@ it("ignores commands without a Finding identity", () => {
       { id: 1, actor: "author", body: "/review-owl accept", createdAt: "2026-01-01" },
     ]),
   ).toEqual({ events: [] });
+});
+
+it("accepts only exact top-level Finding commands", () => {
+  const effects = recognizeFindingDiscussionCommands([
+    comment("> /diffowl recheck", 1),
+    comment("Please investigate:\n/diffowl recheck", 2),
+    comment("/diffowl reassess valid context\nquoted follow-up", 3),
+    comment("```\n/diffowl recheck\n```", 4),
+    comment("/diffowl recheck", 5),
+    comment("/diffowl reassess The endpoint is restricted to administrators.", 6),
+  ]);
+
+  expect(effects.events).toEqual([
+    expect.objectContaining({ id: "5", command: "recheck" }),
+    expect.objectContaining({
+      id: "6",
+      command: "reassess",
+      body: "The endpoint is restricted to administrators.",
+    }),
+  ]);
 });
