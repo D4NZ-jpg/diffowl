@@ -1,0 +1,10 @@
+name: Review OWL request router
+description: Authenticate a pull-request Review request and dispatch the canonical Review OWL workflow.
+inputs:
+  workflow:
+    description: The default-branch workflow file that runs Review OWL.
+    required: false
+    default: review-owl.yml
+runs:
+  using: node24
+  main: dist/index.js

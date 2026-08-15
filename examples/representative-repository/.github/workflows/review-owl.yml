@@ -3,13 +3,32 @@ name: Review OWL
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      repository:
+        required: true
+        type: string
+      pull-request-number:
+        required: true
+        type: string
+      base-sha:
+        required: true
+        type: string
+      head-sha:
+        required: true
+        type: string
+      review-request-event-id:
+        required: true
+        type: string
 
 concurrency:
-  group: review-owl-${{ github.event.pull_request.number }}
+  group: review-owl-${{ inputs.pull-request-number || github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  issues: read
 
 jobs:
   review:
@@ -17,9 +36,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.head-sha || github.event.pull_request.head.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - id: review-owl
         uses: D4NZ-jpg/diffowl@main
+        with:
+          repository: ${{ inputs.repository }}
+          pull-request-number: ${{ inputs.pull-request-number }}
+          base-sha: ${{ inputs.base-sha }}
+          head-sha: ${{ inputs.head-sha }}
+          review-request-event-id: ${{ inputs.review-request-event-id }}
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

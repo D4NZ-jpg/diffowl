@@ -4,6 +4,21 @@ inputs:
   state-directory:
     description: A trusted durable filesystem directory for self-hosted or local-style runs. GitHub-hosted trusted Action runs use the base repository Git state ref instead.
     required: false
+  repository:
+    description: The base repository for an authenticated Review request workflow dispatch.
+    required: false
+  pull-request-number:
+    description: The pull-request number for an authenticated Review request workflow dispatch.
+    required: false
+  base-sha:
+    description: The verified base revision for an authenticated Review request workflow dispatch.
+    required: false
+  head-sha:
+    description: The verified head revision for an authenticated Review request workflow dispatch.
+    required: false
+  review-request-event-id:
+    description: The durable command event identity authorizing a Review request workflow dispatch.
+    required: false
 outputs:
   outcome:
     description: The typed Review outcome as JSON.

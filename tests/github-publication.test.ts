@@ -834,6 +834,18 @@ function publicationAdapterTests(): void {
     });
     expect(init?.body).toBe('{"safe":true}');
   });
+
+  it("accepts GitHub endpoints with an empty success response", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(null, { status: 204 });
+    try {
+      await expect(
+        createGitHubTransport("secret-token")({ method: "POST", path: "/dispatch" }),
+      ).resolves.toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 }
 
 describe("GitHub publication adapter", () => {

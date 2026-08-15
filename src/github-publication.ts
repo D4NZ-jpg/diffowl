@@ -335,6 +335,6 @@ export function createGitHubTransport(token: string, apiUrl = "https://api.githu
     });
     if (!response.ok)
       throw new Error(`GitHub API ${request.method} ${request.path} failed (${response.status}).`);
-    return response.json();
+    return response.status === 204 ? undefined : response.json();
   };
 }

@@ -14,6 +14,7 @@ import {
 } from "../src/github-publication.js";
 import {
   FileSystemReviewPersistenceStore,
+  GitReviewPersistenceStore,
   findingIdentityMarker,
   type RoleExecutionRequest,
 } from "../src/review-engine.js";
@@ -529,6 +530,7 @@ it("removes GITHUB_TOKEN from the engine environment while retaining a publisher
   const io = createActionIo(env);
   expect(env.GITHUB_TOKEN).toBeUndefined();
   expect(io.publishOutcome).toBeTypeOf("function");
+  expect(io.gitPersistence).toBeInstanceOf(GitReviewPersistenceStore);
 });
 
 async function publicationFailureOutputs(error: Error) {

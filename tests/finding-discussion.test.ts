@@ -36,13 +36,13 @@ it("recognizes audited lifecycle commands from Review OWL threads", () => {
   ]);
 });
 
-it("maps ignore, suppress, resolved, recheck, and rerun into ledger effects", () => {
+it("keeps the deprecated full-review alias out of Finding discussion effects", () => {
   const effects = recognizeFindingDiscussionCommands([
     comment("/review-owl ignore noisy in generated code"),
     comment("/review-owl suppress policy allows this", 2),
     comment("/review-owl resolved fixed in latest push", 3),
     comment("/review-owl recheck", 4),
-    comment("/review-owl rerun", 5),
+    comment("/diffowl rerun", 5),
   ]);
 
   expect(effects.dispositions).toEqual({ [fingerprint]: "suppressed" });
@@ -53,7 +53,6 @@ it("maps ignore, suppress, resolved, recheck, and rerun into ledger effects", ()
     "suppress",
     "resolved",
     "recheck",
-    "rerun",
   ]);
 });
 

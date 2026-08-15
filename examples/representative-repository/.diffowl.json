@@ -8,6 +8,12 @@
     "reviewTimeoutSeconds": 600,
     "maxFindings": 25
   },
+  "verification": {
+    "validationCommands": []
+  },
+  "reviewRequests": {
+    "cooldownSeconds": 300
+  },
   "roleProfiles": {
     "reviewer": {
       "provider": "openai",

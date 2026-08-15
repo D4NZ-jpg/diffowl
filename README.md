@@ -15,12 +15,22 @@ name: Review OWL
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      repository: { required: true, type: string }
+      pull-request-number: { required: true, type: string }
+      base-sha: { required: true, type: string }
+      head-sha: { required: true, type: string }
+      review-request-event-id: { required: true, type: string }
+
+concurrency:
+  group: review-owl-${{ inputs.pull-request-number || github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
-  checks: write
   pull-requests: write
-  issues: write
+  issues: read
 
 jobs:
   review:
@@ -28,18 +38,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.head-sha || github.event.pull_request.head.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - id: review-owl
         uses: D4NZ-jpg/diffowl@main
+        with:
+          repository: ${{ inputs.repository }}
+          pull-request-number: ${{ inputs.pull-request-number }}
+          base-sha: ${{ inputs.base-sha }}
+          head-sha: ${{ inputs.head-sha }}
+          review-request-event-id: ${{ inputs.review-request-event-id }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+To accept `/diffowl review`, also install the trusted [`issue_comment` router workflow](examples/representative-repository/.github/workflows/review-request.yml). It checks out only the default branch, carries no provider secrets, authenticates the actor against the latest same-repository pull-request head, records the command event before effects, and dispatches this canonical workflow at the default-branch ref with the verified revision as explicit inputs. Accepted and coalesced requests receive an eyes reaction. Refused requests receive one short reply. Queued progress appears on the trusted default-branch Actions run because GitHub binds a `workflow_dispatch` check to its dispatch ref; Diffowl does not create a second PR-head custom check. `/diffowl rerun` is a deprecated alias for the same path.
+
 The Action's `default` credential profile uses RunCell's `env` credential mode. Provider SDKs read their normal variables from GitHub Secrets. Embedded deployments may instead supply any RunCell `Credentials` configuration, including an explicit agent directory or shared `CredentialStore` for refreshable OAuth credentials.
 
-On GitHub-hosted trusted same-repository pull-request runs, Review OWL stores the canonical Finding ledger and versioned Review run records in dedicated base-repository Git refs under `refs/diffowl/state/...`. The Action advances those refs without force; on a concurrent writer it rereads state, recomputes the persistence transition, and retries once. This path requires `contents: write`. Missing permissions, corrupt state, deleted refs, or apparent rewrites produce a configuration failure with guidance instead of falling back to comments, checks, artifacts, caches, variables, or ephemeral workspace files.
+On GitHub-hosted trusted same-repository pull-request runs, Review OWL stores the canonical Finding ledger and versioned Review run records in dedicated base-repository Git refs under `refs/diffowl/state/...`. Checkout credentials remain disabled; the Action supplies its token only to the bounded Git subprocesses that read or advance those refs, so validation commands cannot inherit repository credentials from the workspace. The Action advances refs without force; on a concurrent writer it rereads state, recomputes the persistence transition, and retries once. This path requires `contents: write`. Missing permissions, corrupt state, deleted refs, or apparent rewrites produce a configuration failure with guidance instead of falling back to comments, checks, artifacts, caches, variables, or ephemeral workspace files.
 
 `state-directory` remains the filesystem persistence option for the local CLI and explicit self-hosted execution. The path is optional, but when configured it must be a trusted directory that survives separate Action process invocations. For persistence across workflow runs, self-hosted deployments must mount or otherwise preserve this directory. Do not place the state directory under pull-request-controlled content or publish it as a public artifact. The Action outputs the typed `outcome`, plus `run-id` and safe `run-metadata` when persistence succeeds. A corrupt or unwritable configured store produces a bounded non-clean failure rather than silently returning a clean result.
 
@@ -112,6 +132,9 @@ Project policy is JSON:
   "verification": {
     "validationCommands": [{ "argv": ["npm", "test"], "timeoutSeconds": 120 }]
   },
+  "reviewRequests": {
+    "cooldownSeconds": 300
+  },
   "roleProfiles": {
     "reviewer": {
       "provider": "openai",
@@ -132,7 +155,7 @@ Project policy is JSON:
 }
 ```
 
-Policy fields are closed: unsupported active fields fail configuration instead of being ignored. Validation commands are trusted base-policy argv arrays, never shell strings. A policy may configure at most 10 commands, each with a timeout no greater than 600 seconds or the complete review timeout; captured stdout and stderr share a 64 KiB bound. On GitHub-hosted runners, the Action executes configured commands without a shell through a credential-free host adapter with abort support, relying on the ephemeral GitHub-hosted job as the isolation boundary. On self-hosted or unknown runners, built-in host execution is unavailable by default; embeddings must inject an isolated `verificationAdapter` to enable validation. The adapter itself does not enforce OS isolation. Local CLI execution remains explicitly user-authorized host execution. Process groups are terminated on timeout or abort where the platform supports them.
+Policy fields are closed: unsupported active fields fail configuration instead of being ignored. `reviewRequests.cooldownSeconds` is optional, defaults to 300 seconds, and cannot be lower than the non-overridable 60-second security minimum. Validation commands are trusted base-policy argv arrays, never shell strings. A policy may configure at most 10 commands, each with a timeout no greater than 600 seconds or the complete review timeout; captured stdout and stderr share a 64 KiB bound. On GitHub-hosted runners, the Action executes configured commands without a shell through a credential-free host adapter with abort support, relying on the ephemeral GitHub-hosted job as the isolation boundary. On self-hosted or unknown runners, built-in host execution is unavailable by default; embeddings must inject an isolated `verificationAdapter` to enable validation. The adapter itself does not enforce OS isolation. Local CLI execution remains explicitly user-authorized host execution. Process groups are terminated on timeout or abort where the platform supports them.
 
 Every policy defines reviewer, challenger, and verifier profiles with a provider, model, and credential-profile name. The trusted Action or CLI adapter supplies those profiles as RunCell `Credentials`; repository policy and review-agent input contain no raw secrets.
 

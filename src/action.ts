@@ -1,8 +1,15 @@
 import { execFile } from "node:child_process";
 import { appendFile, readFile } from "node:fs/promises";
 
-import { type GitHubPullRequestEvent, isPullRequestEvent } from "./action-event.js";
+import type { GitHubPullRequestEvent } from "./action-event.js";
+import {
+  actionReviewRequestIsActive,
+  claimActionReviewRequest,
+  completeActionReviewRequest,
+  resolveActionEvent,
+} from "./action-review-request.js";
 import { addedLinesFromDiff } from "./github-diff.js";
+import { readGitFileAtRevision } from "./git-read.js";
 import {
   createGitHubTransport,
   type PublicationAuthorization,
@@ -20,6 +27,7 @@ import {
   recognizeFindingDiscussionCommands,
 } from "./finding-discussion.js";
 import { listFindingDiscussionComments } from "./github-discussion.js";
+import { readReviewRequestPullRequest } from "./github-review-request.js";
 import { createHostVerificationAdapter } from "./host-verification.js";
 import {
   PROJECT_POLICY_PATH,
@@ -34,12 +42,18 @@ import {
   runReview,
   unavailableVerificationAdapter,
 } from "./review-engine.js";
+import type { ReviewRequestPullRequest } from "./review-request.js";
 import { classifyTrust } from "./trust.js";
 
 export interface ActionIo {
   readFile(path: string, encoding: "utf8"): Promise<string>;
   readDiff(baseSha: string, headSha: string): Promise<string>;
   readPolicy(revision: string, path: string): Promise<string | undefined>;
+  readPullRequest?(
+    repository: string,
+    pullRequestNumber: number,
+  ): Promise<ReviewRequestPullRequest>;
+  readCheckoutHead?(): Promise<string>;
   setOutput(name: string, value: string): Promise<void>;
   writeJobSummary?(contents: string): Promise<void>;
   workflowRunUrl?: string;
@@ -55,6 +69,7 @@ export interface ActionIo {
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>>;
   executeRole?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
   verificationAdapter?: VerificationAdapter;
+  gitPersistence?: ReviewPersistenceStore;
 }
 
 function readGitDiff(baseSha: string, headSha: string): Promise<string> {
@@ -74,24 +89,12 @@ function readGitDiff(baseSha: string, headSha: string): Promise<string> {
   });
 }
 
-function readGitFileAtRevision(revision: string, path: string): Promise<string | undefined> {
+function readGitHead(): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(
-      "git",
-      ["show", `${revision}:${path}`],
-      { encoding: "utf8", maxBuffer: 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error === null) {
-          resolve(stdout);
-          return;
-        }
-        if (stderr.includes("does not exist in") || stderr.includes("exists on disk, but not in")) {
-          resolve(undefined);
-          return;
-        }
-        reject(error);
-      },
-    );
+    execFile("git", ["rev-parse", "HEAD"], { encoding: "utf8" }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout.trim());
+    });
   });
 }
 
@@ -104,6 +107,8 @@ export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
     readFile,
     readDiff: readGitDiff,
     readPolicy: readGitFileAtRevision,
+    readCheckoutHead: readGitHead,
+    ...(token === undefined ? {} : { gitPersistence: new GitReviewPersistenceStore({ token }) }),
     setOutput: async (name, value) => {
       const outputPath = env.GITHUB_OUTPUT;
       if (outputPath === undefined) {
@@ -125,6 +130,8 @@ export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
     ...(transport === undefined
       ? {}
       : {
+          readPullRequest: (repository: string, pullRequestNumber: number) =>
+            readReviewRequestPullRequest(transport, repository, pullRequestNumber),
           listFindingDiscussionComments: (repository: string, pullRequestNumber: number) =>
             listFindingDiscussionComments(transport, repository, pullRequestNumber),
           publishOutcome: (
@@ -164,13 +171,14 @@ function actionVerificationAdapter(
 function actionPersistence(
   env: NodeJS.ProcessEnv,
   trust: ReturnType<typeof classifyTrust>,
+  io: ActionIo,
 ): ReviewPersistenceStore | undefined {
   const stateDirectory = (env["INPUT_STATE-DIRECTORY"] ?? env.INPUT_STATE_DIRECTORY)?.trim();
   const githubHostedEligible =
     env.GITHUB_ACTIONS === "true" &&
     env.RUNNER_ENVIRONMENT === "github-hosted" &&
     trust.class === "trusted_same_repo_pull_request";
-  if (githubHostedEligible) return new GitReviewPersistenceStore();
+  if (githubHostedEligible) return io.gitPersistence ?? new GitReviewPersistenceStore();
   return stateDirectory === undefined || stateDirectory === ""
     ? undefined
     : new FileSystemReviewPersistenceStore(stateDirectory);
@@ -199,32 +207,14 @@ async function reviewDependencies(
   };
 }
 
-// oxlint-disable-next-line max-lines-per-function
+// oxlint-disable-next-line complexity, max-lines-per-function
 export async function runAction(
   env: NodeJS.ProcessEnv,
   io: ActionIo = createActionIo(env),
 ): Promise<ReviewOutcome> {
-  const eventPath = env.GITHUB_EVENT_PATH;
-  if (eventPath === undefined) {
-    throw new Error("GITHUB_EVENT_PATH is required.");
-  }
-  if (env.GITHUB_EVENT_NAME !== "pull_request") {
-    return unsafeContextOutcome(
-      io,
-      "policy_skip",
-      `GitHub event "${env.GITHUB_EVENT_NAME ?? "unknown"}" is not a safe pull_request context.`,
-    );
-  }
-
-  const event: unknown = JSON.parse(await io.readFile(eventPath, "utf8"));
-  if (!isPullRequestEvent(event)) {
-    return unsafeContextOutcome(
-      io,
-      "unsupported_change",
-      "The GitHub event is not a supported pull-request event.",
-    );
-  }
-
+  const resolved = await resolveActionEvent(env, io);
+  if (!resolved.valid) return unsafeContextOutcome(io, resolved.type, resolved.reason);
+  const { event } = resolved;
   const { pull_request: pullRequest, repository } = event;
   if (pullRequest.base.repo.full_name !== repository.full_name) {
     return unsafeContextOutcome(
@@ -241,36 +231,52 @@ export async function runAction(
     actor: pullRequest.user?.login,
   });
 
-  const persistence = actionPersistence(env, trust);
-  const diff = await io.readDiff(pullRequest.base.sha, pullRequest.head.sha);
-  const policyContents = await io.readPolicy(pullRequest.base.sha, PROJECT_POLICY_PATH);
-  const outcome = await runReview(
-    {
-      repository: repository.full_name,
-      number: pullRequest.number,
-      baseSha: pullRequest.base.sha,
-      headSha: pullRequest.head.sha,
-      diff,
-      trust,
-      policy: {
-        source: {
-          type: "trusted_base_branch",
-          revision: pullRequest.base.sha,
-          path: PROJECT_POLICY_PATH,
+  const persistence = actionPersistence(env, trust, io);
+  const request = await claimActionReviewRequest(env, event, persistence);
+  if (request === false) {
+    return unsafeContextOutcome(
+      io,
+      "policy_skip",
+      "The workflow dispatch is not backed by an accepted Review request.",
+    );
+  }
+  try {
+    const diff = await io.readDiff(pullRequest.base.sha, pullRequest.head.sha);
+    const policyContents = await io.readPolicy(pullRequest.base.sha, PROJECT_POLICY_PATH);
+    const outcome = await runReview(
+      {
+        repository: repository.full_name,
+        number: pullRequest.number,
+        baseSha: pullRequest.base.sha,
+        headSha: pullRequest.head.sha,
+        diff,
+        trust,
+        policy: {
+          source: {
+            type: "trusted_base_branch",
+            revision: pullRequest.base.sha,
+            path: PROJECT_POLICY_PATH,
+          },
+          contents: policyContents,
         },
-        contents: policyContents,
       },
-    },
-    await reviewDependencies(env, io, repository.full_name, pullRequest, persistence),
-  );
+      await reviewDependencies(env, io, repository.full_name, pullRequest, persistence),
+    );
 
-  await publishActionOutcome(
-    io,
-    repository.full_name,
-    pullRequest,
-    outcome,
-    addedLinesFromDiff(diff),
-    persistence,
-  );
-  return outcome;
+    if (!(await actionReviewRequestIsActive(event, persistence, request))) {
+      await recordNotAttemptedPublication(io, outcome);
+      throw new Error("The Review request was superseded before publication.");
+    }
+    await publishActionOutcome(
+      io,
+      repository.full_name,
+      pullRequest,
+      outcome,
+      addedLinesFromDiff(diff),
+      persistence,
+    );
+    return outcome;
+  } finally {
+    await completeActionReviewRequest(event, persistence, request);
+  }
 }

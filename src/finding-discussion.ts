@@ -1,6 +1,6 @@
 const fingerprintPattern = /sha256:[\da-f]{64}/iu;
 const commandPattern =
-  /^\/(?:diffowl|review-owl)\s+(accept|rebut|suppress|ignore|resolved|resolve|recheck|rerun|explain|reassess)(?:\s+([\s\S]*))?$/imu;
+  /^\/(?:diffowl|review-owl)\s+(accept|rebut|suppress|ignore|resolved|resolve|recheck|explain|reassess)(?:\s+([\s\S]*))?$/imu;
 
 export type FindingDispositionState = "accepted" | "rebutted" | "suppressed";
 
@@ -11,7 +11,6 @@ export type FindingDiscussionCommand =
   | "ignore"
   | "resolved"
   | "recheck"
-  | "rerun"
   | "explain"
   | "reassess";
 
@@ -80,11 +79,7 @@ function applyLifecycleEffect(
   else if (event.command === "suppress" || event.command === "ignore") {
     dispositions[event.fingerprint] = "suppressed";
   } else if (event.command === "resolved") addUnique(resolved, event.fingerprint);
-  else if (
-    event.command === "recheck" ||
-    event.command === "rerun" ||
-    event.command === "reassess"
-  ) {
+  else if (event.command === "recheck" || event.command === "reassess") {
     addUnique(reassessed, event.fingerprint);
   }
 }
@@ -149,7 +144,6 @@ export function parseFindingDiscussionEvent(value: unknown): FindingDiscussionEv
     "ignore",
     "resolved",
     "recheck",
-    "rerun",
     "explain",
     "reassess",
   ];

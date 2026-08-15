@@ -19,7 +19,7 @@
   },
   "scripts": {
     "build": "npm run clean && tsc -p tsconfig.build.json && node scripts/build-action.mjs",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist review-request/dist",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

@@ -113,8 +113,48 @@ it("cancels a superseded pull-request review workflow", async () => {
     "utf8",
   );
 
-  expect(workflow).toContain("group: review-owl-${{ github.event.pull_request.number }}");
+  expect(workflow).toContain(
+    "group: review-owl-${{ inputs.pull-request-number || github.event.pull_request.number }}",
+  );
   expect(workflow).toContain("cancel-in-progress: true");
+});
+
+it("installs a trusted issue-comment router and one canonical review workflow", async () => {
+  const [router, review, metadata] = await Promise.all([
+    readFile(
+      join(projectRoot, "examples/representative-repository/.github/workflows/review-request.yml"),
+      "utf8",
+    ),
+    readFile(
+      join(projectRoot, "examples/representative-repository/.github/workflows/review-owl.yml"),
+      "utf8",
+    ),
+    readFile(join(projectRoot, "review-request/action.yml"), "utf8"),
+  ]);
+
+  expect(router).toContain("issue_comment:");
+  expect(router).toContain("types: [created]");
+  expect(router).toContain("ref: ${{ github.event.repository.default_branch }}");
+  expect(router).toContain("actions: write");
+  expect(router).toContain("contents: write");
+  expect(router).toContain("pull-requests: read");
+  expect(router).toContain("issues: write");
+  expect(router).toContain("persist-credentials: false");
+  expect(router).toContain("uses: D4NZ-jpg/diffowl/review-request@main");
+  expect(router).not.toContain("OPENAI_API_KEY");
+  expect(router).not.toContain("ANTHROPIC_API_KEY");
+
+  expect(review).toContain("workflow_dispatch:");
+  expect(review).toContain("review-request-event-id:");
+  expect(review).toContain("ref: ${{ inputs.head-sha || github.event.pull_request.head.sha }}");
+  expect(review).toContain("persist-credentials: false");
+  expect(review).toContain("issues: read");
+  expect(review).not.toContain("checks: write");
+  expect(review).toContain(
+    "group: review-owl-${{ inputs.pull-request-number || github.event.pull_request.number }}",
+  );
+  expect(metadata).toContain("using: node24");
+  expect(metadata).toContain("main: dist/index.js");
 });
 
 // oxlint-disable-next-line max-lines-per-function

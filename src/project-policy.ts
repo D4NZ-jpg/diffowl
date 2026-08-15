@@ -1,4 +1,6 @@
 export const PROJECT_POLICY_PATH = ".diffowl.json";
+export const REVIEW_REQUEST_COOLDOWN_DEFAULT_SECONDS = 300;
+export const REVIEW_REQUEST_COOLDOWN_MINIMUM_SECONDS = 60;
 
 export const PROJECT_POLICY_CEILINGS = {
   reviewTimeoutSeconds: 3_600,
@@ -54,6 +56,9 @@ export interface ProjectPolicy {
     validationCommands: ValidationCommand[];
   };
   roleProfiles: RoleProfiles;
+  reviewRequests?: {
+    cooldownSeconds?: number;
+  };
 }
 
 export type PolicyParseResult =
@@ -184,11 +189,24 @@ function validateRoleProfiles(value: unknown): string | undefined {
   );
 }
 
+function validateReviewRequests(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return "Project policy reviewRequests must be an object.";
+  const fieldError = unsupportedField(value, ["cooldownSeconds"], "reviewRequests");
+  if (fieldError !== undefined || value.cooldownSeconds === undefined) return fieldError;
+  if (!isPositiveInteger(value.cooldownSeconds)) {
+    return "Project policy reviewRequests.cooldownSeconds must be a positive integer.";
+  }
+  return value.cooldownSeconds < REVIEW_REQUEST_COOLDOWN_MINIMUM_SECONDS
+    ? `Project policy reviewRequests.cooldownSeconds is below the security minimum of ${REVIEW_REQUEST_COOLDOWN_MINIMUM_SECONDS}.`
+    : undefined;
+}
+
 function validatePolicy(value: unknown): string | undefined {
   if (!isRecord(value)) return "Project policy must be a JSON object.";
   const fieldError = unsupportedField(
     value,
-    ["version", "scope", "limits", "verification", "roleProfiles"],
+    ["version", "scope", "limits", "verification", "roleProfiles", "reviewRequests"],
     "root",
   );
   if (fieldError !== undefined) return fieldError;
@@ -200,7 +218,8 @@ function validatePolicy(value: unknown): string | undefined {
       value.verification,
       isRecord(value.limits) ? value.limits.reviewTimeoutSeconds : undefined,
     ) ??
-    validateRoleProfiles(value.roleProfiles)
+    validateRoleProfiles(value.roleProfiles) ??
+    validateReviewRequests(value.reviewRequests)
   );
 }
 

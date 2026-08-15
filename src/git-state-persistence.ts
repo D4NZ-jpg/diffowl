@@ -12,6 +12,7 @@ import {
   type ReviewPersistenceStore,
   type ReviewPersistenceTransaction,
 } from "./persistence.js";
+import { parseReviewRequestLedger, type ReviewRequestLedger } from "./review-request-state.js";
 import { parseReviewRunRecord, type ReviewRunRecord } from "./review-run-record.js";
 
 interface PersistenceManifest {
@@ -20,6 +21,7 @@ interface PersistenceManifest {
   runs: Record<string, string>;
   publicationEffects: Record<string, string>;
   publicationState?: string | undefined;
+  reviewRequests?: string | undefined;
 }
 
 interface StateDocument {
@@ -42,6 +44,7 @@ export interface GitReviewPersistenceOptions {
   remote?: string | undefined;
   refPrefix?: string | undefined;
   gitDirectory?: string | undefined;
+  token?: string | undefined;
 }
 
 const markerPath = ".diffowl-state-marker.json";
@@ -50,7 +53,22 @@ function configurationFailure(message: string): Error {
   return new Error(`GitHub Finding state is not configured correctly: ${message}`);
 }
 
-function execGit(args: string[], gitDirectory = process.cwd()): Promise<string> {
+function remoteGitEnvironment(token: string | undefined): NodeJS.ProcessEnv {
+  if (token === undefined || token === "") return {};
+  const credentials = Buffer.from(`x-access-token:${token}`).toString("base64");
+  return {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.extraHeader",
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${credentials}`,
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+function execGit(
+  args: string[],
+  gitDirectory = process.cwd(),
+  environment: NodeJS.ProcessEnv = {},
+): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
@@ -65,6 +83,7 @@ function execGit(args: string[], gitDirectory = process.cwd()): Promise<string> 
           GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME ?? "Review OWL",
           GIT_COMMITTER_EMAIL:
             process.env.GIT_COMMITTER_EMAIL ?? "review-owl@users.noreply.github.com",
+          ...environment,
         },
         maxBuffer: 50 * 1024 * 1024,
       },
@@ -133,7 +152,8 @@ function parseManifest(value: unknown): PersistenceManifest {
         record.publicationEffects === null ||
         Array.isArray(record.publicationEffects))) ||
     (record.ledger !== undefined && typeof record.ledger !== "string") ||
-    (record.publicationState !== undefined && typeof record.publicationState !== "string")
+    (record.publicationState !== undefined && typeof record.publicationState !== "string") ||
+    (record.reviewRequests !== undefined && typeof record.reviewRequests !== "string")
   ) {
     throw configurationFailure("The Finding ledger manifest has an invalid schema.");
   }
@@ -150,7 +170,7 @@ function parseManifest(value: unknown): PersistenceManifest {
     }
   }
   if (
-    [record.ledger, record.publicationState].some(
+    [record.ledger, record.publicationState, record.reviewRequests].some(
       (path) => typeof path === "string" && !/^objects\/[A-Za-z0-9._-]+\.json$/u.test(path),
     )
   ) {
@@ -265,6 +285,7 @@ async function loadState(
     [
       manifest.ledger,
       manifest.publicationState,
+      manifest.reviewRequests,
       ...Object.values(manifest.runs),
       ...Object.values(manifest.publicationEffects),
     ].filter(Boolean) as string[],
@@ -284,6 +305,7 @@ class GitReviewPersistenceTransaction implements ReviewPersistenceTransaction {
   private readonly stagedRuns = new Map<string, ReviewRunRecord>();
   private readonly stagedPublicationEffects = new Map<string, JsonValue>();
   private stagedPublicationState: JsonValue | undefined;
+  private stagedReviewRequests: ReviewRequestLedger | undefined;
 
   constructor(private readonly state: StateDocument) {}
 
@@ -367,14 +389,34 @@ class GitReviewPersistenceTransaction implements ReviewPersistenceTransaction {
     return value as JsonValue;
   }
 
+  async saveReviewRequests(ledger: ReviewRequestLedger): Promise<void> {
+    this.stagedReviewRequests = parseReviewRequestLedger(ledger);
+  }
+
+  async loadReviewRequests(): Promise<ReviewRequestLedger | undefined> {
+    if (this.stagedReviewRequests !== undefined) return this.stagedReviewRequests;
+    const path = this.state.manifest.reviewRequests;
+    if (path === undefined) return undefined;
+    const value = this.state.objects.get(path);
+    if (value === undefined)
+      throw configurationFailure("Persisted Review request ledger is missing from Git state.");
+    try {
+      return parseReviewRequestLedger(value);
+    } catch (error) {
+      throw configurationFailure(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   // jscpd:ignore-end
 
+  // oxlint-disable-next-line complexity
   materialize(): StateDocument | undefined {
     if (
       this.stagedLedger === undefined &&
       this.stagedRuns.size === 0 &&
       this.stagedPublicationEffects.size === 0 &&
-      this.stagedPublicationState === undefined
+      this.stagedPublicationState === undefined &&
+      this.stagedReviewRequests === undefined
     )
       return undefined;
     const generation = randomUUID();
@@ -406,6 +448,11 @@ class GitReviewPersistenceTransaction implements ReviewPersistenceTransaction {
       const path = `objects/publication-state-${generation}.json`;
       next.objects.set(path, this.stagedPublicationState);
       next.manifest.publicationState = path;
+    }
+    if (this.stagedReviewRequests !== undefined) {
+      const path = `objects/review-requests-${generation}.json`;
+      next.objects.set(path, this.stagedReviewRequests);
+      next.manifest.reviewRequests = path;
     }
     return next;
   }
@@ -518,9 +565,10 @@ async function remoteRef(
   remote: string,
   ref: string,
   gitDirectory: string,
+  environment: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
   try {
-    const output = await execGit(["ls-remote", remote, ref], gitDirectory);
+    const output = await execGit(["ls-remote", remote, ref], gitDirectory, environment);
     const [sha] = output.split(/\s+/u);
     return sha === "" ? undefined : sha;
   } catch (error) {
@@ -536,6 +584,7 @@ async function assertWritableStateRemote(
   remote: string,
   refPrefix: string,
   gitDirectory: string,
+  environment: NodeJS.ProcessEnv,
 ): Promise<void> {
   const probeRef = `${refPrefix}/access-check/${randomUUID()}`;
   let head: string;
@@ -549,7 +598,7 @@ async function assertWritableStateRemote(
     );
   }
   try {
-    await execGit(["push", "--dry-run", remote, `${head}:${probeRef}`], gitDirectory);
+    await execGit(["push", "--dry-run", remote, `${head}:${probeRef}`], gitDirectory, environment);
   } catch (error) {
     throw configurationFailure(
       `Unable to verify Contents: write permission for the base-repository Finding state ref. Configure the workflow with permissions: contents: write, and do not fall back to comments, checks, artifacts, caches, variables, or ephemeral state. Git said: ${
@@ -564,13 +613,14 @@ async function fetchStateRefs(
   remote: string,
   refs: { state: string; marker: string; index: string },
   gitDirectory: string,
+  environment: NodeJS.ProcessEnv,
 ): Promise<void> {
   const [localState, localMarker, remoteState, remoteMarker, remoteIndex] = await Promise.all([
     optionalRef(refs.state, gitDirectory),
     optionalRef(refs.marker, gitDirectory),
-    remoteRef(remote, refs.state, gitDirectory),
-    remoteRef(remote, refs.marker, gitDirectory),
-    remoteRef(remote, refs.index, gitDirectory),
+    remoteRef(remote, refs.state, gitDirectory, environment),
+    remoteRef(remote, refs.marker, gitDirectory, environment),
+    remoteRef(remote, refs.index, gitDirectory, environment),
   ]);
   const hadLocalState = localState !== undefined || localMarker !== undefined;
   const hasRemoteState = remoteState !== undefined || remoteMarker !== undefined;
@@ -580,7 +630,7 @@ async function fetchStateRefs(
     );
   }
   if (remoteIndex !== undefined) {
-    await execGit(["fetch", remote, `${refs.index}:${refs.index}`], gitDirectory);
+    await execGit(["fetch", remote, `${refs.index}:${refs.index}`], gitDirectory, environment);
   }
   if (!hasRemoteState) return;
   if (remoteState === undefined || remoteMarker === undefined) {
@@ -592,6 +642,7 @@ async function fetchStateRefs(
     await execGit(
       ["fetch", remote, `${refs.state}:${refs.state}`, `${refs.marker}:${refs.marker}`],
       gitDirectory,
+      environment,
     );
   } catch (error) {
     throw configurationFailure(
@@ -608,6 +659,7 @@ async function pushRefs(
   indexCommit: string,
   refs: { state: string; marker: string; index: string },
   gitDirectory: string,
+  environment: NodeJS.ProcessEnv,
 ): Promise<void> {
   try {
     await execGit(
@@ -620,6 +672,7 @@ async function pushRefs(
         `${indexCommit}:${refs.index}`,
       ],
       gitDirectory,
+      environment,
     );
     await Promise.all([
       execGit(["update-ref", refs.state, commit], gitDirectory),
@@ -638,18 +691,25 @@ export class GitReviewPersistenceStore implements ReviewPersistenceStore {
   private readonly remote: string;
   private readonly refPrefix: string;
   private readonly gitDirectory: string;
+  private readonly remoteEnvironment: NodeJS.ProcessEnv;
 
   constructor(options: GitReviewPersistenceOptions = {}) {
     this.remote = options.remote ?? "origin";
     this.refPrefix = options.refPrefix ?? "refs/diffowl/state";
     this.gitDirectory = options.gitDirectory ?? process.cwd();
+    this.remoteEnvironment = remoteGitEnvironment(options.token);
   }
 
   async prepare(key: PullRequestPersistenceKey): Promise<void> {
     const refs = refsFor(key, this.refPrefix);
-    await fetchStateRefs(this.remote, refs, this.gitDirectory);
+    await fetchStateRefs(this.remote, refs, this.gitDirectory, this.remoteEnvironment);
     await loadState(refs, this.gitDirectory);
-    await assertWritableStateRemote(this.remote, this.refPrefix, this.gitDirectory);
+    await assertWritableStateRemote(
+      this.remote,
+      this.refPrefix,
+      this.gitDirectory,
+      this.remoteEnvironment,
+    );
   }
 
   async withTransaction<T>(
@@ -659,7 +719,7 @@ export class GitReviewPersistenceStore implements ReviewPersistenceStore {
     const refs = refsFor(key, this.refPrefix);
     for (let attempt = 0; attempt < 2; attempt += 1) {
       // oxlint-disable-next-line no-await-in-loop
-      await fetchStateRefs(this.remote, refs, this.gitDirectory);
+      await fetchStateRefs(this.remote, refs, this.gitDirectory, this.remoteEnvironment);
       // oxlint-disable-next-line no-await-in-loop
       const state = await loadState(refs, this.gitDirectory);
       const transaction = new GitReviewPersistenceTransaction(state);
@@ -677,7 +737,14 @@ export class GitReviewPersistenceStore implements ReviewPersistenceStore {
       const indexCommit = await commitIndex(refs, indexTip, index, this.gitDirectory);
       try {
         // oxlint-disable-next-line no-await-in-loop
-        await pushRefs(this.remote, commit, indexCommit, refs, this.gitDirectory);
+        await pushRefs(
+          this.remote,
+          commit,
+          indexCommit,
+          refs,
+          this.gitDirectory,
+          this.remoteEnvironment,
+        );
         return result;
       } catch (error) {
         if (attempt === 1) throw error;

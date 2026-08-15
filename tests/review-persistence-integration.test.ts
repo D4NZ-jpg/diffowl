@@ -45,6 +45,8 @@ class MemoryPersistence implements ReviewPersistenceStore {
         this.publicationState = state;
       },
       loadPublicationState: async () => this.publicationState as never,
+      saveReviewRequests: async () => {},
+      loadReviewRequests: async () => undefined,
     };
     return operation(transaction);
   }

@@ -221,12 +221,39 @@ describe("GitReviewPersistenceStore", () => {
       await transaction.saveRunRecord(runRecord("run-1"));
       await transaction.savePublicationEffects("run-1", { result: "complete" });
       await transaction.savePublicationState({ version: 1, effectOwners: {} });
+      await transaction.saveReviewRequests({
+        version: 1,
+        events: {
+          command: {
+            eventId: "command",
+            actor: "author",
+            command: "review",
+            deprecatedAlias: false,
+            observedAt: "2026-08-15T00:00:00.000Z",
+            headSha: reviewedPullRequest.headSha,
+            decision: "dispatch",
+            requestId: "command",
+          },
+        },
+        requests: {
+          command: {
+            requestId: "command",
+            headSha: reviewedPullRequest.headSha,
+            status: "queued",
+            requestedAt: "2026-08-15T00:00:00.000Z",
+          },
+        },
+      });
     });
     await store.withTransaction(key, async (transaction) => {
       expect(await transaction.loadLedger()).toEqual(ledger());
       expect(await transaction.loadRunRecord("run-1")).toMatchObject({ runId: "run-1" });
       expect(await transaction.loadPublicationEffects("run-1")).toEqual({ result: "complete" });
       expect(await transaction.loadPublicationState()).toEqual({ version: 1, effectOwners: {} });
+      expect(await transaction.loadReviewRequests()).toMatchObject({
+        events: { command: { decision: "dispatch" } },
+        requests: { command: { status: "queued" } },
+      });
       await transaction.saveRunRecord(runRecord("run-1"));
     });
     await expect(

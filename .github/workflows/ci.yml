@@ -23,5 +23,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - name: Verify bundled Action is current
-        run: git diff --exit-code -- dist/action/index.js
+      - name: Verify bundled Actions are current
+        run: git diff --exit-code -- dist/action/index.js review-request/dist/index.js

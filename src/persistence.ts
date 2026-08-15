@@ -5,6 +5,7 @@ import { dirname, join, resolve, sep } from "node:path";
 
 import { canonicalJson, type JsonValue } from "./canonical-json.js";
 import { parseFindingLedger, type FindingLedger } from "./finding-ledger.js";
+import { parseReviewRequestLedger, type ReviewRequestLedger } from "./review-request-state.js";
 import { parseReviewRunRecord, type ReviewRunRecord } from "./review-run-record.js";
 
 export interface PullRequestPersistenceKey {
@@ -29,6 +30,8 @@ export interface ReviewPersistenceTransaction {
   loadPublicationEffects(runId: string): Promise<JsonValue | undefined>;
   savePublicationState(state: JsonValue): Promise<void>;
   loadPublicationState(): Promise<JsonValue | undefined>;
+  saveReviewRequests(ledger: ReviewRequestLedger): Promise<void>;
+  loadReviewRequests(): Promise<ReviewRequestLedger | undefined>;
 }
 
 interface PersistenceManifest {
@@ -37,6 +40,7 @@ interface PersistenceManifest {
   runs: Record<string, string>;
   publicationEffects: Record<string, string>;
   publicationState?: string | undefined;
+  reviewRequests?: string | undefined;
 }
 
 function assertSafeSegment(value: string, noun: string): void {
@@ -112,7 +116,8 @@ function parseManifest(value: unknown): PersistenceManifest {
         record.publicationEffects === null ||
         Array.isArray(record.publicationEffects))) ||
     (record.ledger !== undefined && typeof record.ledger !== "string") ||
-    (record.publicationState !== undefined && typeof record.publicationState !== "string")
+    (record.publicationState !== undefined && typeof record.publicationState !== "string") ||
+    (record.reviewRequests !== undefined && typeof record.reviewRequests !== "string")
   ) {
     throw new Error("Persistence manifest is invalid.");
   }
@@ -130,7 +135,7 @@ function parseManifest(value: unknown): PersistenceManifest {
   if (!validObjectMap(Object.entries(runs)) || !validObjectMap(Object.entries(publicationEffects)))
     throw new Error("Persistence manifest is invalid.");
   if (
-    [record.ledger, record.publicationState].some(
+    [record.ledger, record.publicationState, record.reviewRequests].some(
       (path) => typeof path === "string" && !/^objects\/[A-Za-z0-9._-]+\.json$/u.test(path),
     )
   ) {
@@ -249,6 +254,7 @@ class FileSystemReviewPersistenceTransaction implements ReviewPersistenceTransac
   private readonly stagedRuns = new Map<string, ReviewRunRecord>();
   private readonly stagedPublicationEffects = new Map<string, JsonValue>();
   private stagedPublicationState: JsonValue | undefined;
+  private stagedReviewRequests: ReviewRequestLedger | undefined;
 
   constructor(
     private readonly directory: string,
@@ -321,12 +327,26 @@ class FileSystemReviewPersistenceTransaction implements ReviewPersistenceTransac
     return value as JsonValue;
   }
 
+  async saveReviewRequests(ledger: ReviewRequestLedger): Promise<void> {
+    this.stagedReviewRequests = parseReviewRequestLedger(ledger);
+  }
+
+  async loadReviewRequests(): Promise<ReviewRequestLedger | undefined> {
+    if (this.stagedReviewRequests !== undefined) return this.stagedReviewRequests;
+    if (this.manifest.reviewRequests === undefined) return undefined;
+    const value = await readJson(safeResolve(this.directory, this.manifest.reviewRequests));
+    if (value === undefined) throw new Error("Persisted Review request ledger is missing.");
+    return parseReviewRequestLedger(value);
+  }
+
+  // oxlint-disable-next-line complexity
   async commit(): Promise<void> {
     if (
       this.stagedLedger === undefined &&
       this.stagedRuns.size === 0 &&
       this.stagedPublicationEffects.size === 0 &&
-      this.stagedPublicationState === undefined
+      this.stagedPublicationState === undefined &&
+      this.stagedReviewRequests === undefined
     )
       return;
     const generation = randomUUID();
@@ -356,6 +376,11 @@ class FileSystemReviewPersistenceTransaction implements ReviewPersistenceTransac
       const path = `objects/publication-state-${generation}.json`;
       await atomicWriteJson(safeResolve(this.directory, path), this.stagedPublicationState);
       next.publicationState = path;
+    }
+    if (this.stagedReviewRequests !== undefined) {
+      const path = `objects/review-requests-${generation}.json`;
+      await atomicWriteJson(safeResolve(this.directory, path), this.stagedReviewRequests);
+      next.reviewRequests = path;
     }
     await atomicWriteJson(join(this.directory, "manifest.json"), next);
   }
