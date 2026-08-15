@@ -346,7 +346,7 @@ it("records an authorized Review request before acknowledging and dispatching it
     new Date("2026-08-15T00:00:00.000Z"),
   );
 
-  expect(result).toEqual({ type: "dispatched", headSha: "head-sha", deprecatedAlias: false });
+  expect(result).toEqual({ type: "dispatched", headSha: "head-sha" });
   expect(effects).toEqual(["eyes", "dispatch:main:head-sha"]);
 });
 
@@ -403,7 +403,6 @@ it("coalesces an active Review request for the same head", async () => {
   expect(duplicate).toEqual({
     type: "coalesced",
     headSha: "head-sha",
-    deprecatedAlias: false,
   });
   expect(effects).toEqual(["eyes:9003", "dispatch:9003", "eyes:9004"]);
 });
@@ -419,7 +418,6 @@ it("does not coalesce a full Review onto same-head Finding command work", async 
           eventId: "finding",
           actor: "octocat",
           command: "recheck",
-          deprecatedAlias: false,
           observedAt: "2026-08-15T00:00:00.000Z",
           headSha: "head-sha",
           workType: "finding_discussion",
@@ -494,7 +492,6 @@ it("supersedes an interrupted same-head request after the review timeout", async
           eventId: "interrupted",
           actor: "octocat",
           command: "review",
-          deprecatedAlias: false,
           observedAt: "2026-08-15T00:00:00.000Z",
           headSha: "head-sha",
           decision: "dispatch",
@@ -548,7 +545,6 @@ it("refuses a completed same-head Review request during the Project-policy coold
           eventId: "previous",
           actor: "octocat",
           command: "review",
-          deprecatedAlias: false,
           observedAt: "2026-08-15T00:00:00.000Z",
           headSha: "head-sha",
           decision: "dispatch",
@@ -587,7 +583,7 @@ it("refuses a completed same-head Review request during the Project-policy coold
   expect(replies).toEqual([reason]);
 });
 
-it("routes the deprecated alias through the canonical Review request path", async () => {
+it("ignores the removed rerun alias", async () => {
   const persistence = await stateStore();
   const dispatched: string[] = [];
   const io = reviewIo({
@@ -602,8 +598,8 @@ it("routes the deprecated alias through the canonical Review request path", asyn
     persistence,
   );
 
-  expect(result).toEqual({ type: "dispatched", headSha: "head-sha", deprecatedAlias: true });
-  expect(dispatched).toEqual(["9006"]);
+  expect(result).toEqual({ type: "ignored" });
+  expect(dispatched).toEqual([]);
 });
 
 it("supersedes stale work when a Review request observes a newer head", async () => {

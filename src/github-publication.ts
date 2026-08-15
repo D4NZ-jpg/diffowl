@@ -510,6 +510,19 @@ export async function publishReviewOutcome(
   };
 }
 
+function githubPermissionGuidance(response: Response): string {
+  if (response.status !== 403) return "";
+  const accepted = response.headers.get("x-accepted-github-permissions");
+  if (accepted === null || accepted === "") {
+    return " Check the workflow's GITHUB_TOKEN permissions.";
+  }
+  const permissions = accepted
+    .split(",")
+    .map((permission) => permission.trim().replaceAll("_", "-").replace("=", ": "))
+    .join(", ");
+  return ` Configure workflow permissions: ${permissions}.`;
+}
+
 export function createGitHubTransport(token: string, apiUrl = "https://api.github.com") {
   return async (request: GitHubRequest): Promise<unknown> => {
     const response = await fetch(`${apiUrl}${request.path}`, {
@@ -522,8 +535,11 @@ export function createGitHubTransport(token: string, apiUrl = "https://api.githu
       },
       ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
     });
-    if (!response.ok)
-      throw new Error(`GitHub API ${request.method} ${request.path} failed (${response.status}).`);
+    if (!response.ok) {
+      throw new Error(
+        `GitHub API ${request.method} ${request.path} failed (${response.status}).${githubPermissionGuidance(response)}`,
+      );
+    }
     return response.status === 204 ? undefined : response.json();
   };
 }

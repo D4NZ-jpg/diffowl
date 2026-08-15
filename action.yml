@@ -1,8 +1,8 @@
 name: Review OWL
 description: Classify pull-request trust and run the self-hostable Diffowl Review engine.
 inputs:
-  state-directory:
-    description: A trusted durable filesystem directory for self-hosted or local-style runs. GitHub-hosted trusted Action runs use the base repository Git state ref instead.
+  self-hosted-state-directory:
+    description: A trusted durable filesystem directory required for explicit self-hosted Action runs. GitHub-hosted runs always use the base repository Git state ref and ignore filesystem state.
     required: false
   repository:
     description: The base repository for an authenticated Review request workflow dispatch.

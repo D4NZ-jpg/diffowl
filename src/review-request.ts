@@ -69,8 +69,8 @@ export interface ReviewRequestIo {
 }
 
 export type ReviewRequestResult =
-  | { type: "dispatched"; headSha: string; deprecatedAlias: boolean }
-  | { type: "coalesced"; headSha: string; deprecatedAlias: boolean }
+  | { type: "dispatched"; headSha: string }
+  | { type: "coalesced"; headSha: string }
   | { type: "refused"; reason: string }
   | { type: "ignored" };
 
@@ -211,7 +211,6 @@ export async function routeReviewRequest(
     eventId: event.eventId,
     actor: event.actor,
     command: routed.command,
-    deprecatedAlias: routed.deprecatedAlias,
     workType: routed.workType,
     observedAt,
     headSha: context.pullRequest.headSha,
@@ -237,6 +236,5 @@ export async function routeReviewRequest(
   return {
     type: record.decision === "dispatch" ? "dispatched" : "coalesced",
     headSha: record.headSha,
-    deprecatedAlias: record.deprecatedAlias,
   };
 }

@@ -8,6 +8,8 @@
   "files": [
     "action.yml",
     "dist",
+    "review-request",
+    "examples/representative-repository",
     "README.md"
   ],
   "type": "module",

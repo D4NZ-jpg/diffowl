@@ -9,17 +9,47 @@ export const REQUIRED_V1_THREAT_TEST_IDS = [
   "privileged_publisher_validation",
   "exact_head_sha_binding",
   "stale_head_prevention",
+  "malicious_command_rejection",
+  "forged_finding_identity_rejection",
+  "poisoned_input_rejection",
+  "state_tampering_detection",
+  "permission_loss_failure",
+  "concurrent_writer_reconciliation",
+  "patch_isolation",
+  "partial_github_failure_reconciliation",
   "timeout_non_clean",
   "provider_failure_non_clean",
   "unsafe_validation_denial",
   "data_only_publication",
 ] as const;
 
+export const REQUIRED_V1_RELEASE_EVIDENCE_IDS = [
+  "installation_contract",
+  "packaged_action_distribution",
+  "representative_workflows",
+  "readme_guidance",
+  "author_review_request_path",
+  "author_finding_discussion_path",
+  "targeted_human_findings_path",
+  "targeted_human_clean_path",
+  "workflow_check_readiness",
+  "job_summary_delivery",
+  "actionable_findings_review",
+  "partial_publication_failure",
+] as const;
+
 export type V1ThreatTestId = (typeof REQUIRED_V1_THREAT_TEST_IDS)[number];
+export type V1ReleaseEvidenceId = (typeof REQUIRED_V1_RELEASE_EVIDENCE_IDS)[number];
 
 export interface ThreatTestResult {
   id: V1ThreatTestId;
   name: string;
+  passed: boolean;
+  evidence: string[];
+}
+
+export interface ReleaseEvidenceResult {
+  id: V1ReleaseEvidenceId;
   passed: boolean;
   evidence: string[];
 }
@@ -33,6 +63,10 @@ export interface V1ReleaseReportCard {
       results: ThreatTestResult[];
     };
   };
+  releaseEvidence: {
+    required: V1ReleaseEvidenceId[];
+    results: ReleaseEvidenceResult[];
+  };
 }
 
 export interface V1ReleaseGateResult {
@@ -43,6 +77,7 @@ export interface V1ReleaseGateResult {
 export function createV1ReleaseReportCard(
   syntheticEvaluation: ReleaseReportCard,
   threatTests: readonly ThreatTestResult[],
+  releaseEvidence: readonly ReleaseEvidenceResult[] = [],
 ): V1ReleaseReportCard {
   return {
     version: 1,
@@ -52,6 +87,10 @@ export function createV1ReleaseReportCard(
         required: [...REQUIRED_V1_THREAT_TEST_IDS],
         results: [...threatTests],
       },
+    },
+    releaseEvidence: {
+      required: [...REQUIRED_V1_RELEASE_EVIDENCE_IDS],
+      results: [...releaseEvidence],
     },
   };
 }
@@ -68,20 +107,33 @@ function syntheticFailures(report: ReleaseReportCard | undefined): string[] {
   return failures;
 }
 
-function threatFailures(results: readonly ThreatTestResult[]): string[] {
+function evidenceFailures<Id extends string>(
+  required: readonly Id[],
+  results: readonly { id: Id; passed: boolean; evidence: string[] }[],
+  label: string,
+): string[] {
   const byId = new Map(results.map((result) => [result.id, result]));
-  return REQUIRED_V1_THREAT_TEST_IDS.flatMap((id) => {
+  return required.flatMap((id) => {
     const result = byId.get(id);
-    if (result === undefined) return [`Threat test ${id} is missing.`];
-    if (!result.passed) return [`Threat test ${id} did not pass.`];
-    return result.evidence.length === 0 ? [`Threat test ${id} has no evidence.`] : [];
+    if (result === undefined) return [`${label} ${id} is missing.`];
+    if (!result.passed) return [`${label} ${id} did not pass.`];
+    return result.evidence.length === 0 ? [`${label} ${id} has no evidence.`] : [];
   });
 }
 
 export function evaluateV1ReleaseGate(report: V1ReleaseReportCard): V1ReleaseGateResult {
   const failures = [
     ...syntheticFailures(report.syntheticEvaluation),
-    ...threatFailures(report.security.threatTests.results),
+    ...evidenceFailures(
+      REQUIRED_V1_THREAT_TEST_IDS,
+      report.security.threatTests.results,
+      "Threat test",
+    ),
+    ...evidenceFailures(
+      REQUIRED_V1_RELEASE_EVIDENCE_IDS,
+      report.releaseEvidence?.results ?? [],
+      "Release evidence",
+    ),
   ];
   return { passed: failures.length === 0, failures };
 }

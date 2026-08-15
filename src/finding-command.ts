@@ -2,7 +2,6 @@ import { findingCommandAuthorizationReason } from "./finding-command-authorizati
 import {
   findingIdentityMarker,
   parseFindingDiscussionCommandBody,
-  recognizeFindingDiscussionCommands,
   type FindingDiscussionEvent,
 } from "./finding-discussion.js";
 import type { PullRequestPersistenceKey, ReviewPersistenceStore } from "./persistence.js";
@@ -82,26 +81,29 @@ function commandEvent(
   root: FindingCommandReviewComment,
   pullRequestAuthor: string,
 ): FindingDiscussionEvent | undefined {
-  if (root.isBot !== true || root.actor !== "github-actions[bot]") return undefined;
-  const effects = recognizeFindingDiscussionCommands(
-    [
-      {
-        id: event.id,
-        actor: event.actor,
-        body: event.body,
-        createdAt: event.createdAt,
-        threadBody: root.body,
-        source: "pull_request_review_comment",
-      },
-    ],
-    { authorLogins: [pullRequestAuthor] },
-  );
-  const recognized = effects.events[0];
-  if (recognized === undefined) return undefined;
-  const rootPrefix = `${findingIdentityMarker(recognized.fingerprint)}\n### Review OWL material Finding`;
-  return root.body === rootPrefix || root.body.startsWith(`${rootPrefix}\n`)
-    ? recognized
-    : undefined;
+  if (
+    event.actor !== pullRequestAuthor ||
+    root.isBot !== true ||
+    root.actor !== "github-actions[bot]"
+  ) {
+    return undefined;
+  }
+  const parsed = parseFindingDiscussionCommandBody(event.body);
+  const fingerprint = /^<!-- diffowl:finding:v1 fingerprint=(sha256:[\da-f]{64}) -->/iu.exec(
+    root.body,
+  )?.[1];
+  if (parsed === undefined || fingerprint === undefined) return undefined;
+  const rootPrefix = `${findingIdentityMarker(fingerprint)}\n### Review OWL material Finding`;
+  if (root.body !== rootPrefix && !root.body.startsWith(`${rootPrefix}\n`)) return undefined;
+  return {
+    id: event.id,
+    fingerprint: fingerprint.toLowerCase(),
+    actor: event.actor,
+    command: parsed.command,
+    createdAt: event.createdAt,
+    ...(parsed.body === undefined ? {} : { body: parsed.body }),
+    source: "pull_request_review_comment",
+  };
 }
 
 async function findingState(
@@ -185,7 +187,6 @@ export async function routeFindingCommand(
     eventId: event.id,
     actor: event.actor,
     command: parsed.command,
-    deprecatedAlias: false,
     observedAt,
     headSha: pullRequest.headSha,
     cooldownSeconds: policy.valid

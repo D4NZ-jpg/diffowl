@@ -129,11 +129,6 @@ try {
           persistence,
         );
   if (result.type !== "ignored") process.stdout.write(`${JSON.stringify(result)}\n`);
-  if ("deprecatedAlias" in result && result.type === "dispatched" && result.deprecatedAlias) {
-    process.stdout.write(
-      "::warning::/diffowl rerun is deprecated; use /diffowl review. Both use the same Review request path.\n",
-    );
-  }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`Review OWL request router failed: ${message}\n`);

@@ -196,7 +196,7 @@ describe("FileSystemReviewPersistenceStore", () => {
     ).rejects.toThrow("symbolic");
   });
 
-  it("rejects corrupt persisted manifests", async () => {
+  it("threat: rejects corrupt persisted manifests as state tampering", async () => {
     const root = await temporaryRoot();
     const directory = join(root, "repositories", "example", "review-target", "pull-requests", "42");
     await mkdir(directory, { recursive: true });
@@ -228,7 +228,6 @@ describe("GitReviewPersistenceStore", () => {
             eventId: "command",
             actor: "author",
             command: "review",
-            deprecatedAlias: false,
             observedAt: "2026-08-15T00:00:00.000Z",
             headSha: reviewedPullRequest.headSha,
             decision: "dispatch",
@@ -269,7 +268,7 @@ describe("GitReviewPersistenceStore", () => {
     expect(await git(["ls-remote", "origin", markerRef], checkout)).toContain(markerRef);
   }, 60_000);
 
-  it("rereads and reconciles one Git conflict, then preserves both transitions", async () => {
+  it("threat: reconciles one concurrent Git writer and preserves both transitions", async () => {
     const { remote, checkout } = await temporaryGitRepository();
     const secondCheckout = join(await temporaryRoot(), "second-checkout");
     await git(["clone", "--branch", "main", remote, secondCheckout], checkout);
@@ -314,7 +313,7 @@ describe("GitReviewPersistenceStore", () => {
     );
   }, 60_000);
 
-  it("fails after a second Git conflict without discarding competing transitions", async () => {
+  it("threat: fails a repeated concurrent-writer conflict without discarding transitions", async () => {
     const { remote, checkout } = await temporaryGitRepository();
     const competingCheckout = join(await temporaryRoot(), "competing-checkout");
     await git(["clone", "--branch", "main", remote, competingCheckout], checkout);
@@ -370,7 +369,7 @@ describe("GitReviewPersistenceStore", () => {
     ).rejects.toThrow("prior Diffowl state marker exists");
   }, 30_000);
 
-  it("reports partial Git state ref deletion as configuration failure", async () => {
+  it("threat: reports partial Git state-ref tampering as configuration failure", async () => {
     const { checkout } = await temporaryGitRepository();
     const store = new GitReviewPersistenceStore({ gitDirectory: checkout });
     await store.withTransaction(key, async (transaction) => transaction.saveLedger(ledger()));

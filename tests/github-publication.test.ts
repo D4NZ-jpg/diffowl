@@ -12,13 +12,11 @@ import {
 import {
   FINDING_COMMENT_MARKER,
   GITHUB_BODY_LIMIT,
-  SUMMARY_MARKER,
   checkConclusion,
   checkOutput,
   findingBody,
   findingShortIdentity,
   jobSummaryBody,
-  summaryBody,
 } from "../src/github-presentation.js";
 import { parseGitHubReviewOutcome } from "../src/github-outcome-schema.js";
 import { MAX_PUBLICATION_OUTCOME_BYTES } from "../src/github-publication-validation.js";
@@ -36,6 +34,7 @@ const authorization = {
   sourceRunVerified: true,
   surfaces: ["pull_request_review"] as const,
 };
+const legacySummaryMarker = "<!-- diffowl:current-summary:v1 -->";
 type IssueCommentPage = Array<{
   id: number;
   body: string;
@@ -198,8 +197,8 @@ function fakeTransport(
   const requests: GitHubRequest[] = [];
   const reviews = options.reviews ?? [];
   const comments: IssueCommentPage = options.existingSummary
-    ? [{ id: 31, body: SUMMARY_MARKER, user: { login: "github-actions[bot]" } }]
-    : [{ id: 30, body: SUMMARY_MARKER, user: { login: "someone-else" } }];
+    ? [{ id: 31, body: legacySummaryMarker, user: { login: "github-actions[bot]" } }]
+    : [{ id: 30, body: legacySummaryMarker, user: { login: "someone-else" } }];
   const reviewComments: IssueCommentPage = options.reviewComments ?? [];
   const checkRuns = options.checkRuns ?? [];
   let seededPages = false;
@@ -468,15 +467,6 @@ describe("GitHub publication presentation", () => {
     expect(rendered).toContain("bounded representation; full outcome truncated");
     expect(rendered).toContain('"complete":false');
     expect(rendered).toContain('"sha256"');
-  });
-
-  it("keeps unanchored Findings in the maintained summary", () => {
-    const findingsOutcome = {
-      ...outcome("findings"),
-      materialFindings: [finding(null)],
-    } as ReviewOutcome;
-    expect(summaryBody(findingsOutcome)).toContain("Findings without a current inline anchor");
-    expect(summaryBody(findingsOutcome)).toContain("Null input crashes");
   });
 
   it("identifies every required job-summary fact and relevant link", () => {
@@ -1150,6 +1140,22 @@ function publicationAdapterTests(): void {
       "x-github-api-version": "2022-11-28",
     });
     expect(init?.body).toBe('{"safe":true}');
+  });
+
+  it("threat: explains required permissions when GitHub revokes publication access", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response('{"message":"Resource not accessible by integration"}', {
+        status: 403,
+        headers: { "x-accepted-github-permissions": "pull_requests=write" },
+      });
+    try {
+      await expect(
+        createGitHubTransport("secret-token")({ method: "POST", path: "/reviews" }),
+      ).rejects.toThrow(/permissions: pull-requests: write/iu);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("accepts GitHub endpoints with an empty success response", async () => {

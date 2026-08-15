@@ -18,11 +18,7 @@ export type GitHubCheckConclusion =
   | "success"
   | "timed_out";
 
-export const SUMMARY_MARKER = "<!-- diffowl:current-summary:v1 -->";
-export const PUBLISHING_SUMMARY_MARKER = "<!-- diffowl:publishing-summary:v1";
-export const SUPERSEDED_SUMMARY_MARKER = "<!-- diffowl:superseded-summary:v1 -->";
 export const FINDING_COMMENT_MARKER = "### Review OWL material Finding";
-export const SUPERSEDED_FINDING_MARKER = "<!-- diffowl:superseded-finding:v1 -->";
 export const GITHUB_BODY_LIMIT = 60 * 1024;
 
 const conclusions: Record<ReviewOutcome["type"], GitHubCheckConclusion> = {
@@ -203,64 +199,6 @@ function lifecycleCounts(findings: MaterialFinding[]): string {
     .filter((state) => counts.has(state))
     .map((state) => `${state}: ${counts.get(state)}`)
     .join(", ");
-}
-
-export function summaryBody(
-  outcome: ReviewOutcome,
-  unanchoredFindings: MaterialFinding[] = [],
-  reviewUrl?: string,
-): string {
-  const findings = materialFindings(outcome);
-  const attempts = validationAttempts(outcome);
-  if (unanchoredFindings.length === 0) {
-    unanchoredFindings = findings.filter((finding) => finding.location.line === undefined);
-  }
-  const lines = [
-    SUMMARY_MARKER,
-    "## Review OWL — current summary",
-    "",
-    `**Outcome:** \`${outcome.type}\``,
-    `**Check conclusion:** \`${checkConclusion(outcome)}\``,
-    `**Material Findings:** ${findings.length}${findings.length === 0 ? "" : ` (${lifecycleCounts(findings)})`}`,
-    `**Validation attempts:** ${attempts.length}${attempts.length === 0 ? "" : ` (${attempts.map((attempt) => attempt.status).join(", ")})`}`,
-  ];
-  const reason = outcomeReason(outcome);
-  if (reason !== undefined) lines.push(`**Coverage/details:** ${reason}`);
-  if ("pullRequest" in outcome) lines.push(`**Reviewed head:** \`${outcome.pullRequest.headSha}\``);
-  if (reviewUrl !== undefined) lines.push(`**Current finding threads:** ${reviewUrl}`);
-  if (unanchoredFindings.length > 0) {
-    lines.push("", "### Findings without a current inline anchor");
-    for (const finding of unanchoredFindings) {
-      lines.push(
-        `- **${finding.summary}** — ${finding.impact} (\`${finding.location.path}\`, ${finding.lifecycleState}, ${finding.verificationState.type})`,
-      );
-    }
-  }
-  lines.push(
-    "",
-    "This comment is maintained in place and represents the current Review OWL state.",
-  );
-  return truncateUtf8(lines.join("\n"), GITHUB_BODY_LIMIT).content;
-}
-
-export function publishingSummaryBody(runMarker: string, headSha: string): string {
-  return `${PUBLISHING_SUMMARY_MARKER} run=${runMarker} head=${headSha} -->\nReview OWL publication is in progress. This comment is not authoritative.`;
-}
-
-export function supersededSummaryBody(currentSummaryCommentId?: number): string {
-  const destination =
-    currentSummaryCommentId === undefined
-      ? "A replacement publication is in progress."
-      : `The current summary is #issuecomment-${currentSummaryCommentId}.`;
-  return `${SUPERSEDED_SUMMARY_MARKER}\nThis Review OWL summary is not authoritative. ${destination}`;
-}
-
-export function supersededFindingBody(currentSummaryCommentId?: number): string {
-  const destination =
-    currentSummaryCommentId === undefined
-      ? "A replacement publication is in progress."
-      : `The current summary is #issuecomment-${currentSummaryCommentId}.`;
-  return `${SUPERSEDED_FINDING_MARKER}\nThis Review OWL Finding thread is from a superseded publication and is not the current recommendation. ${destination}`;
 }
 
 function machineOutcome(outcome: ReviewOutcome): { json: string; complete: boolean } {

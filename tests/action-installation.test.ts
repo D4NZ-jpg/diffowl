@@ -119,8 +119,18 @@ it("cancels a superseded pull-request review workflow", async () => {
   expect(workflow).toContain("cancel-in-progress: true");
 });
 
+// oxlint-disable-next-line max-lines-per-function
 it("installs a trusted issue-comment router and one canonical review workflow", async () => {
-  const [router, review, metadata] = await Promise.all([
+  const [
+    router,
+    review,
+    routerMetadata,
+    actionMetadata,
+    actionBundle,
+    routerBundle,
+    readme,
+    packageManifest,
+  ] = await Promise.all([
     readFile(
       join(projectRoot, "examples/representative-repository/.github/workflows/review-request.yml"),
       "utf8",
@@ -130,6 +140,11 @@ it("installs a trusted issue-comment router and one canonical review workflow", 
       "utf8",
     ),
     readFile(join(projectRoot, "review-request/action.yml"), "utf8"),
+    readFile(join(projectRoot, "action.yml"), "utf8"),
+    readFile(join(projectRoot, "dist/action/index.js"), "utf8"),
+    readFile(join(projectRoot, "review-request/dist/index.js"), "utf8"),
+    readFile(join(projectRoot, "README.md"), "utf8"),
+    readFile(join(projectRoot, "package.json"), "utf8"),
   ]);
 
   expect(router).toContain("issue_comment:");
@@ -158,8 +173,22 @@ it("installs a trusted issue-comment router and one canonical review workflow", 
   expect(review).toContain(
     "group: review-owl-${{ inputs.pull-request-number || github.event.pull_request.number }}",
   );
-  expect(metadata).toContain("using: node24");
-  expect(metadata).toContain("main: dist/index.js");
+  expect(routerMetadata).toContain("using: node24");
+  expect(routerMetadata).toContain("main: dist/index.js");
+  expect(actionMetadata).toContain("self-hosted-state-directory:");
+  expect(actionMetadata).not.toMatch(/^  state-directory:/mu);
+  expect(actionBundle).toContain("INPUT_SELF-HOSTED-STATE-DIRECTORY");
+  expect(routerBundle).not.toContain("/diffowl rerun");
+  expect(readme).toContain("`self-hosted-state-directory`");
+  expect(readme).not.toContain("/diffowl rerun");
+  expect(JSON.parse(packageManifest).files).toEqual(
+    expect.arrayContaining([
+      "action.yml",
+      "dist",
+      "review-request",
+      "examples/representative-repository",
+    ]),
+  );
 });
 
 // oxlint-disable-next-line max-lines-per-function
@@ -169,7 +198,8 @@ describe("installable Review OWL Action", () => {
     const metadata = await readFile(join(projectRoot, "action.yml"), "utf8");
     expect(metadata).toContain("using: node24");
     expect(metadata).toContain("main: dist/action/index.js");
-    expect(metadata).toContain("state-directory:");
+    expect(metadata).toContain("self-hosted-state-directory:");
+    expect(metadata).not.toMatch(/^  state-directory:/mu);
     expect(metadata).toContain("run-id:");
     expect(metadata).toContain("run-metadata:");
     expect(metadata).toContain("publication:");
@@ -183,7 +213,9 @@ describe("installable Review OWL Action", () => {
       GITHUB_EVENT_NAME: "pull_request",
       GITHUB_EVENT_PATH: eventPath,
       GITHUB_OUTPUT: outputPath,
-      "INPUT_STATE-DIRECTORY": stateDirectory,
+      GITHUB_ACTIONS: "true",
+      RUNNER_ENVIRONMENT: "self-hosted",
+      "INPUT_SELF-HOSTED-STATE-DIRECTORY": stateDirectory,
       OPENAI_API_KEY: "test-openai-secret",
       ANTHROPIC_API_KEY: "test-anthropic-secret",
     };
@@ -231,4 +263,23 @@ describe("installable Review OWL Action", () => {
     ) as { runs: Record<string, string> };
     expect(Object.keys(manifest.runs)).toHaveLength(2);
   }, 30_000);
+
+  it("explains the required GitHub token instead of falling back from Git state", async () => {
+    const { repository, baseSha, headSha } = await createRepresentativeRepository();
+    const eventPath = await writePullRequestEvent(repository, baseSha, headSha);
+    const stdout = await actionStdout(repository, {
+      ...process.env,
+      GITHUB_ACTIONS: "true",
+      RUNNER_ENVIRONMENT: "github-hosted",
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_OUTPUT: join(repository, "action-output"),
+      GITHUB_TOKEN: undefined,
+    });
+
+    expect(JSON.parse(stdout)).toMatchObject({
+      type: "configuration_failure",
+      reason: expect.stringMatching(/GITHUB_TOKEN.*contents: write/iu),
+    });
+  });
 });

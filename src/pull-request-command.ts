@@ -5,7 +5,7 @@ import type { PullRequestPersistenceKey, ReviewPersistenceStore } from "./persis
 import type { CommandWorkType, RoutedCommand } from "./review-request-state.js";
 
 export type PullRequestCommand =
-  | { type: "review"; deprecatedAlias: boolean }
+  | { type: "review" }
   | {
       type: "finding";
       command: Extract<FindingDiscussionCommand, "recheck" | "reassess">;
@@ -16,8 +16,7 @@ export type PullRequestCommand =
 
 export function recognizePullRequestCommand(body: string): PullRequestCommand | undefined {
   const text = body.trim();
-  if (text === "/diffowl review") return { type: "review", deprecatedAlias: false };
-  if (text === "/diffowl rerun") return { type: "review", deprecatedAlias: true };
+  if (text === "/diffowl review") return { type: "review" };
   const recheck = text.match(/^\/diffowl recheck (F-[\da-f]{8})$/iu);
   if (recheck !== null) {
     return { type: "finding", command: "recheck", findingId: recheck[1]!.toUpperCase() };
@@ -63,7 +62,6 @@ async function findingTarget(
 
 export interface PullRequestCommandContext {
   command: RoutedCommand;
-  deprecatedAlias: boolean;
   workType: CommandWorkType;
   findingFingerprint?: string | undefined;
   findingContext?: string | undefined;
@@ -82,12 +80,11 @@ export async function resolvePullRequestCommand(
   observedAt: string,
 ): Promise<PullRequestCommandContext> {
   if (command.type === "review") {
-    return { command: "review", deprecatedAlias: command.deprecatedAlias, workType: "full_review" };
+    return { command: "review", workType: "full_review" };
   }
   if (command.type === "malformed_finding") {
     return {
       command: "review",
-      deprecatedAlias: false,
       workType: "full_review",
       reason: command.reason,
     };
@@ -97,7 +94,6 @@ export async function resolvePullRequestCommand(
   if (entry === undefined) {
     return {
       command: command.command,
-      deprecatedAlias: false,
       workType: "full_review",
       rootCommentId: event.eventId,
       reason: target.reason,
@@ -105,7 +101,6 @@ export async function resolvePullRequestCommand(
   }
   return {
     command: command.command,
-    deprecatedAlias: false,
     workType: entry.reviewedHeadSha === headSha ? "finding_discussion" : "full_review",
     findingFingerprint: entry.fingerprint,
     ...(command.context === undefined ? {} : { findingContext: command.context }),

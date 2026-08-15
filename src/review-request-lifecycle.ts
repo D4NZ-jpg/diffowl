@@ -14,7 +14,6 @@ export interface ReviewRequestDecisionInput {
   eventId: string;
   actor: string;
   command?: RoutedCommand | undefined;
-  deprecatedAlias: boolean;
   observedAt: string;
   headSha: string;
   cooldownSeconds: number;
@@ -33,7 +32,6 @@ function baseEventRecord(input: ReviewRequestDecisionInput) {
     eventId: input.eventId,
     actor: input.actor,
     command: input.command ?? ("review" as const),
-    deprecatedAlias: input.deprecatedAlias,
     observedAt: input.observedAt,
     headSha: input.headSha,
     ...(input.workType === undefined ? {} : { workType: input.workType }),

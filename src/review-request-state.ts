@@ -9,7 +9,6 @@ export interface ReviewRequestEventRecord {
   eventId: string;
   actor: string;
   command: RoutedCommand;
-  deprecatedAlias: boolean;
   observedAt: string;
   headSha: string;
   workType?: CommandWorkType | undefined;
@@ -87,7 +86,6 @@ const eventFields = [
   "eventId",
   "actor",
   "command",
-  "deprecatedAlias",
   "observedAt",
   "headSha",
   "workType",
@@ -199,7 +197,6 @@ function parseEvent(eventId: string, value: unknown): ReviewRequestEventRecord {
       "explain",
       "reassess",
     ].includes(String(value.command)) &&
-    typeof value.deprecatedAlias === "boolean" &&
     timestamp(value.observedAt) &&
     typeof value.headSha === "string" &&
     value.headSha.length > 0 &&

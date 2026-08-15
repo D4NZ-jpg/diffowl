@@ -295,7 +295,7 @@ it("persists Action runs and publishes safe run outputs", async () => {
       {
         GITHUB_EVENT_NAME: "pull_request",
         GITHUB_EVENT_PATH: eventPath,
-        "INPUT_STATE-DIRECTORY": stateDirectory,
+        "INPUT_SELF-HOSTED-STATE-DIRECTORY": stateDirectory,
       },
       {
         readFile,
@@ -315,6 +315,37 @@ it("persists Action runs and publishes safe run outputs", async () => {
   expect(await persistedRunCount(stateDirectory)).toBe(2);
 });
 
+it("does not fall back from Git state to a supplied filesystem directory", async () => {
+  const gitState = await stateDirectories.create();
+  const ignoredFileSystemState = await stateDirectories.create();
+
+  await runAction(
+    {
+      GITHUB_ACTIONS: "true",
+      RUNNER_ENVIRONMENT: "github-hosted",
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+      INPUT_SELF_HOSTED_STATE_DIRECTORY: ignoredFileSystemState,
+    },
+    {
+      ...capturingActionIo(new Map()),
+      gitPersistence: new FileSystemReviewPersistenceStore(gitState),
+      publishOutcome: async (target, _outcome, authorization) => {
+        await authorization.claimAuthority?.();
+        return {
+          result: "complete",
+          headSha: target.headSha,
+          inlineCommentCount: 0,
+          unanchoredFindingCount: 0,
+        };
+      },
+    },
+  );
+
+  await expect(persistedRunCount(gitState)).resolves.toBe(1);
+  await expect(persistedRunCount(ignoredFileSystemState)).rejects.toThrow(/ENOENT|no such file/iu);
+});
+
 it("does not rescan historical Finding discussion comments during an ordinary Review", async () => {
   const stateDirectory = await stateDirectories.create();
   const event = JSON.stringify(pullRequestEvent({ actor: "author" }));
@@ -324,9 +355,6 @@ it("does not rescan historical Finding discussion comments during an ordinary Re
     readPolicy: async () => representativePolicy,
     setOutput: async () => undefined,
     executeRole: async (request: RoleExecutionRequest) => emptyRoleResult(request),
-    listFindingDiscussionComments: async () => {
-      throw new Error("ordinary Review must not rescan historical comments");
-    },
   };
 
   await expect(
@@ -334,7 +362,7 @@ it("does not rescan historical Finding discussion comments during an ordinary Re
       {
         GITHUB_EVENT_NAME: "pull_request",
         GITHUB_EVENT_PATH: eventPath,
-        INPUT_STATE_DIRECTORY: stateDirectory,
+        INPUT_SELF_HOSTED_STATE_DIRECTORY: stateDirectory,
       },
       actionIo,
     ),
@@ -354,7 +382,7 @@ it("publishes one visible disposition per Finding transition in the same Action 
     {
       GITHUB_EVENT_NAME: "pull_request",
       GITHUB_EVENT_PATH: eventPath,
-      INPUT_STATE_DIRECTORY: stateDirectory,
+      INPUT_SELF_HOSTED_STATE_DIRECTORY: stateDirectory,
     },
     { ...baseIo, executeRole: async (request) => twoFindingRoleResult(request) },
   );
@@ -411,7 +439,7 @@ it("publishes one visible disposition per Finding transition in the same Action 
     {
       GITHUB_EVENT_NAME: "pull_request",
       GITHUB_EVENT_PATH: eventPath,
-      INPUT_STATE_DIRECTORY: stateDirectory,
+      INPUT_SELF_HOSTED_STATE_DIRECTORY: stateDirectory,
     },
     {
       ...baseIo,
@@ -440,7 +468,7 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
     {
       GITHUB_EVENT_NAME: "pull_request",
       GITHUB_EVENT_PATH: eventPath,
-      INPUT_STATE_DIRECTORY: stateDirectory,
+      INPUT_SELF_HOSTED_STATE_DIRECTORY: stateDirectory,
     },
     {
       ...capturingActionIo(outputs),
@@ -500,7 +528,7 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
 
 // The Action seam intentionally keeps generation, validation, persistence, and publication visible.
 // oxlint-disable-next-line max-lines-per-function
-it("carries an isolated exact-head Suggested patch through the Action publication seam", async () => {
+it("threat: carries a patch through exact-head credential-free isolation", async () => {
   const stateDirectory = await stateDirectories.create();
   let publishedFinding: unknown;
   const patchPolicy = JSON.stringify(
@@ -519,7 +547,7 @@ it("carries an isolated exact-head Suggested patch through the Action publicatio
     {
       GITHUB_EVENT_NAME: "pull_request",
       GITHUB_EVENT_PATH: eventPath,
-      INPUT_STATE_DIRECTORY: stateDirectory,
+      INPUT_SELF_HOSTED_STATE_DIRECTORY: stateDirectory,
     },
     {
       readFile,
@@ -723,7 +751,7 @@ async function publicationFailureOutputs(error: Error) {
       {
         GITHUB_EVENT_NAME: "pull_request",
         GITHUB_EVENT_PATH: eventPath,
-        INPUT_STATE_DIRECTORY: stateDirectory,
+        INPUT_SELF_HOSTED_STATE_DIRECTORY: stateDirectory,
       },
       {
         ...capturingActionIo(outputs),
@@ -738,7 +766,7 @@ async function publicationFailureOutputs(error: Error) {
   return JSON.parse(outputs.get("publication") ?? "{}");
 }
 
-it("reports publication denial as a separate incomplete publication", async () => {
+it("threat: reports GitHub permission loss as incomplete publication", async () => {
   await expect(
     publicationFailureOutputs(
       new Error("Refusing to publish an invalid, oversized, or stale Review outcome."),
@@ -766,7 +794,7 @@ it("preserves confirmed effects when job-summary publication fails", async () =>
       {
         GITHUB_EVENT_NAME: "pull_request",
         GITHUB_EVENT_PATH: eventPath,
-        INPUT_STATE_DIRECTORY: stateDirectory,
+        INPUT_SELF_HOSTED_STATE_DIRECTORY: stateDirectory,
       },
       {
         ...capturingActionIo(outputs),
@@ -854,7 +882,7 @@ it("reports incomplete publication when confirmed-effect persistence fails", asy
   expect(summaries.at(-1)).toContain("**Publication result:** `incomplete`");
 });
 
-it("records confirmed effects when required publication is incomplete", async () => {
+it("threat: records confirmed effects after a partial GitHub failure", async () => {
   const stateDirectory = await stateDirectories.create();
   const outputs = new Map<string, string>();
   const receipt = {
@@ -869,7 +897,7 @@ it("records confirmed effects when required publication is incomplete", async ()
       {
         GITHUB_EVENT_NAME: "pull_request",
         GITHUB_EVENT_PATH: eventPath,
-        INPUT_STATE_DIRECTORY: stateDirectory,
+        INPUT_SELF_HOSTED_STATE_DIRECTORY: stateDirectory,
       },
       {
         ...capturingActionIo(outputs),

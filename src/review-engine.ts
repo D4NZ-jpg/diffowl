@@ -112,12 +112,15 @@ export type {
   UnexpectedSyntheticFinding,
 } from "./synthetic-evaluation.js";
 export {
+  REQUIRED_V1_RELEASE_EVIDENCE_IDS,
   REQUIRED_V1_THREAT_TEST_IDS,
   createV1ReleaseReportCard,
   evaluateV1ReleaseGate,
 } from "./release-gate.js";
 export type {
+  ReleaseEvidenceResult,
   ThreatTestResult,
+  V1ReleaseEvidenceId,
   V1ReleaseGateResult,
   V1ReleaseReportCard,
   V1ThreatTestId,
@@ -142,7 +145,6 @@ export {
   findingIdentityMarker,
   parseFindingDiscussionCommandBody,
   parseFindingDiscussionEvent,
-  recognizeFindingDiscussionCommands,
 } from "./finding-discussion.js";
 export type {
   FindingLedger,
@@ -155,8 +157,6 @@ export type {
 } from "./finding-ledger.js";
 export type {
   FindingDiscussionCommand,
-  FindingDiscussionComment,
-  FindingDiscussionEffects,
   ParsedFindingDiscussionCommand,
 } from "./finding-discussion.js";
 export { GitReviewPersistenceStore } from "./git-state-persistence.js";

@@ -8,6 +8,7 @@ import {
   completeActionReviewRequest,
   resolveActionEvent,
 } from "./action-review-request.js";
+import type { GitHubPullRequestEvent } from "./action-event.js";
 import { runFindingDiscussionWork } from "./finding-discussion-work.js";
 import { addedLinesFromDiff } from "./github-diff.js";
 import { readGitFileAtRevision } from "./git-read.js";
@@ -169,20 +170,82 @@ function actionVerificationAdapter(
     : unavailableVerificationAdapter;
 }
 
+interface ActionPersistenceSelection {
+  persistence?: ReviewPersistenceStore | undefined;
+  configurationReason?: string | undefined;
+}
+
+function filesystemPersistence(stateDirectory: string | undefined): ActionPersistenceSelection {
+  if (stateDirectory === undefined || stateDirectory === "") return {};
+  return { persistence: new FileSystemReviewPersistenceStore(stateDirectory) };
+}
+
+function githubHostedPersistence(io: ActionIo): ActionPersistenceSelection {
+  if (io.gitPersistence !== undefined && io.publishOutcome !== undefined) {
+    return { persistence: io.gitPersistence };
+  }
+  return {
+    configurationReason:
+      "The default GitHub-hosted Action requires GITHUB_TOKEN with permissions: contents: write and pull-requests: write so durable Git state and GitHub publication are available. Diffowl does not fall back to filesystem state or partial publication.",
+  };
+}
+
+function selfHostedPersistence(stateDirectory: string | undefined): ActionPersistenceSelection {
+  if (stateDirectory !== undefined && stateDirectory !== "") {
+    return { persistence: new FileSystemReviewPersistenceStore(stateDirectory) };
+  }
+  return {
+    configurationReason:
+      "A self-hosted Action run requires the self-hosted-state-directory input to name a trusted durable filesystem directory. Diffowl does not fall back to ephemeral state.",
+  };
+}
+
 function actionPersistence(
   env: NodeJS.ProcessEnv,
   trust: ReturnType<typeof classifyTrust>,
   io: ActionIo,
-): ReviewPersistenceStore | undefined {
-  const stateDirectory = (env["INPUT_STATE-DIRECTORY"] ?? env.INPUT_STATE_DIRECTORY)?.trim();
-  const githubHostedEligible =
-    env.GITHUB_ACTIONS === "true" &&
-    env.RUNNER_ENVIRONMENT === "github-hosted" &&
-    trust.class === "trusted_same_repo_pull_request";
-  if (githubHostedEligible) return io.gitPersistence ?? new GitReviewPersistenceStore();
-  return stateDirectory === undefined || stateDirectory === ""
-    ? undefined
-    : new FileSystemReviewPersistenceStore(stateDirectory);
+): ActionPersistenceSelection {
+  const stateDirectory = (
+    env["INPUT_SELF-HOSTED-STATE-DIRECTORY"] ?? env.INPUT_SELF_HOSTED_STATE_DIRECTORY
+  )?.trim();
+  if (env.GITHUB_ACTIONS !== "true" || trust.class !== "trusted_same_repo_pull_request") {
+    return filesystemPersistence(stateDirectory);
+  }
+  if (env.RUNNER_ENVIRONMENT === "github-hosted") return githubHostedPersistence(io);
+  if (env.RUNNER_ENVIRONMENT === "self-hosted") {
+    return selfHostedPersistence(stateDirectory);
+  }
+  return {
+    configurationReason:
+      "RUNNER_ENVIRONMENT must identify a github-hosted or self-hosted runner before Diffowl can select durable Finding state.",
+  };
+}
+
+async function configurationFailureOutcome(
+  io: ActionIo,
+  event: GitHubPullRequestEvent,
+  trust: ReturnType<typeof classifyTrust>,
+  reason: string,
+): Promise<ReviewOutcome> {
+  const outcome: ReviewOutcome = {
+    type: "configuration_failure",
+    pullRequest: {
+      repository: event.repository.full_name,
+      number: event.pull_request.number,
+      baseSha: event.pull_request.base.sha,
+      headSha: event.pull_request.head.sha,
+    },
+    policySource: {
+      type: "trusted_base_branch",
+      revision: event.pull_request.base.sha,
+      path: PROJECT_POLICY_PATH,
+    },
+    reason,
+    trust,
+  };
+  await setReviewOutputs(io, outcome);
+  await recordNotAttemptedPublication(io, outcome);
+  return outcome;
 }
 
 type ClaimedActionRequest = Awaited<ReturnType<typeof claimActionReviewRequest>>;
@@ -252,7 +315,11 @@ export async function runAction(
     actor: pullRequest.user?.login,
   });
 
-  const persistence = actionPersistence(env, trust, io);
+  const persistenceSelection = actionPersistence(env, trust, io);
+  if (persistenceSelection.configurationReason !== undefined) {
+    return configurationFailureOutcome(io, event, trust, persistenceSelection.configurationReason);
+  }
+  const persistence = persistenceSelection.persistence;
   const request = await claimActionReviewRequest(env, event, persistence);
   if (request === false) {
     return unsafeContextOutcome(

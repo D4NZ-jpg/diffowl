@@ -204,7 +204,6 @@ it("applies Finding command cooldowns per stable Finding identity", async () => 
           eventId: "previous",
           actor: "octocat",
           command: "reassess",
-          deprecatedAlias: false,
           observedAt: "2026-08-15T00:01:00.000Z",
           headSha: "head-sha",
           workType: "finding_discussion",

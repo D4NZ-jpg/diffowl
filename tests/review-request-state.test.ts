@@ -7,7 +7,6 @@ function event(overrides: Record<string, unknown> = {}) {
     eventId: "event",
     actor: "author",
     command: "review",
-    deprecatedAlias: false,
     observedAt: "2026-08-15T00:00:00.000Z",
     headSha: "head-sha",
     decision: "dispatch",
