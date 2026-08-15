@@ -1,6 +1,7 @@
 /* oxlint-disable max-lines, max-lines-per-function */
 import { afterEach, expect, it } from "vitest";
 
+import { findingShortIdentityFromFingerprint } from "../src/finding-fingerprint.js";
 import { FileSystemReviewPersistenceStore } from "../src/persistence.js";
 import {
   claimReviewRequest,
@@ -21,6 +22,31 @@ afterEach(stateDirectories.removeAll);
 
 async function stateStore(): Promise<FileSystemReviewPersistenceStore> {
   return new FileSystemReviewPersistenceStore(await stateDirectories.create());
+}
+
+async function seedUnanchoredFinding(
+  persistence: FileSystemReviewPersistenceStore,
+  fingerprint = `sha256:${"a".repeat(64)}`,
+  reviewedHeadSha = "head-sha",
+): Promise<string> {
+  await persistence.withTransaction(key, async (transaction) => {
+    await transaction.saveLedger({
+      version: 1,
+      entries: [
+        {
+          fingerprint,
+          summary: "Unanchored Finding",
+          locationPath: "src/example.ts",
+          reviewedHeadSha,
+          lifecycleState: "persisting",
+          firstSeenRunId: "run-1",
+          lastChangedRunId: "run-1",
+          lastSeenRunId: "run-1",
+        },
+      ],
+    });
+  });
+  return findingShortIdentityFromFingerprint(fingerprint);
 }
 
 const policy = JSON.stringify(projectPolicy());
@@ -60,6 +86,231 @@ function reviewIo(overrides: Partial<ReviewRequestIo> = {}): ReviewRequestIo {
     ...overrides,
   };
 }
+
+it("routes a current-head unanchored Finding command to bounded discussion work", async () => {
+  const persistence = await stateStore();
+  const findingId = await seedUnanchoredFinding(persistence);
+  const effects: string[] = [];
+
+  const result = await routeReviewRequest(
+    event("finding-1", { body: `/diffowl reassess ${findingId} Approved product context.` }),
+    reviewIo({
+      addEyes: async (eventId) => {
+        effects.push(`eyes:${eventId}`);
+      },
+      dispatchReview: async (request) => {
+        effects.push(
+          `dispatch:${request.workType}:${request.command}:${request.findingFingerprint}`,
+        );
+      },
+    }),
+    persistence,
+    new Date("2026-08-15T00:00:00.000Z"),
+  );
+
+  expect(result).toMatchObject({ type: "dispatched", headSha: "head-sha" });
+  expect(effects).toEqual([
+    "eyes:finding-1",
+    `dispatch:finding_discussion:reassess:sha256:${"a".repeat(64)}`,
+  ]);
+  await persistence.withTransaction(key, async (transaction) => {
+    expect((await transaction.loadLedger())?.entries[0]?.discussion).toEqual([
+      expect.objectContaining({
+        id: "finding-1",
+        command: "reassess",
+        body: "Approved product context.",
+        source: "issue_comment",
+      }),
+    ]);
+  });
+});
+
+it("routes a newer-head unanchored Finding command through a full Review", async () => {
+  const persistence = await stateStore();
+  const findingId = await seedUnanchoredFinding(
+    persistence,
+    `sha256:${"b".repeat(64)}`,
+    "reviewed-head",
+  );
+  const dispatched: unknown[] = [];
+
+  const result = await routeReviewRequest(
+    event("finding-new-head", { body: `/diffowl recheck ${findingId}` }),
+    reviewIo({
+      dispatchReview: async (request) => {
+        dispatched.push(request);
+      },
+    }),
+    persistence,
+  );
+
+  expect(result).toMatchObject({ type: "dispatched", headSha: "head-sha" });
+  expect(dispatched).toEqual([
+    expect.objectContaining({
+      workType: "full_review",
+      command: "recheck",
+      findingFingerprint: `sha256:${"b".repeat(64)}`,
+      rootCommentId: "finding-new-head",
+    }),
+  ]);
+});
+
+it("makes duplicate PR-wide Finding command delivery idempotent", async () => {
+  const persistence = await stateStore();
+  const findingId = await seedUnanchoredFinding(persistence);
+  const effects: string[] = [];
+  const io = reviewIo({
+    addEyes: async () => {
+      effects.push("eyes");
+    },
+    dispatchReview: async () => {
+      effects.push("dispatch");
+    },
+  });
+  const command = event("finding-duplicate", { body: `/diffowl recheck ${findingId}` });
+
+  await routeReviewRequest(command, io, persistence);
+  await routeReviewRequest(command, io, persistence);
+
+  expect(effects).toEqual(["eyes", "dispatch"]);
+  await persistence.withTransaction(key, async (transaction) => {
+    expect((await transaction.loadLedger())?.entries[0]?.discussion).toHaveLength(1);
+  });
+});
+
+it("refuses unauthorized PR-wide Finding commands without recording discussion", async () => {
+  const persistence = await stateStore();
+  const findingId = await seedUnanchoredFinding(persistence);
+  const replies: string[] = [];
+
+  const result = await routeReviewRequest(
+    event("finding-reader", { actor: "reviewer", body: `/diffowl recheck ${findingId}` }),
+    reviewIo({
+      readPermission: async () => "write",
+      replyOnce: async (_eventId, message) => {
+        replies.push(message);
+      },
+    }),
+    persistence,
+  );
+
+  expect(result).toEqual({
+    type: "refused",
+    reason: "Diffowl Finding commands must be authored by the pull-request author.",
+  });
+  expect(replies).toEqual([
+    "Diffowl Finding commands must be authored by the pull-request author.",
+  ]);
+  await persistence.withTransaction(key, async (transaction) => {
+    expect((await transaction.loadLedger())?.entries[0]?.discussion).toBeUndefined();
+  });
+});
+
+it.each([
+  ["unknown", "/diffowl recheck F-00000000", "Finding identity F-00000000 is unknown."],
+  [
+    "malformed",
+    "/diffowl reassess not-an-id context",
+    "Use `/diffowl recheck F-1234abcd` or `/diffowl reassess F-1234abcd <context>`.",
+  ],
+] as const)(
+  "refuses %s PR-wide Finding identities without lifecycle mutation",
+  async (_case, body, reason) => {
+    const persistence = await stateStore();
+    await seedUnanchoredFinding(persistence);
+    const replies: string[] = [];
+
+    const result = await routeReviewRequest(
+      event(`finding-${_case}`, { body }),
+      reviewIo({
+        replyOnce: async (_eventId, message) => {
+          replies.push(message);
+        },
+      }),
+      persistence,
+    );
+
+    expect(result).toEqual({ type: "refused", reason });
+    expect(replies).toEqual([reason]);
+    await persistence.withTransaction(key, async (transaction) => {
+      const entry = (await transaction.loadLedger())?.entries[0];
+      expect(entry).toMatchObject({ lifecycleState: "persisting" });
+      expect(entry?.discussion).toBeUndefined();
+    });
+  },
+);
+
+it.each(["rebutted", "suppressed"] as const)(
+  "lets the author reassess a %s unanchored Finding",
+  async (lifecycleState) => {
+    const persistence = await stateStore();
+    const findingId = await seedUnanchoredFinding(persistence);
+    await persistence.withTransaction(key, async (transaction) => {
+      const ledger = (await transaction.loadLedger())!;
+      ledger.entries[0]!.lifecycleState = lifecycleState;
+      await transaction.saveLedger(ledger);
+    });
+
+    const result = await routeReviewRequest(
+      event(`finding-${lifecycleState}`, {
+        body: `/diffowl reassess ${findingId} New product context.`,
+      }),
+      reviewIo(),
+      persistence,
+    );
+
+    expect(result).toMatchObject({ type: "dispatched", headSha: "head-sha" });
+    await persistence.withTransaction(key, async (transaction) => {
+      expect((await transaction.loadLedger())?.entries[0]?.discussion).toEqual([
+        expect.objectContaining({ command: "reassess", body: "New product context." }),
+      ]);
+    });
+  },
+);
+
+it("refuses stale and ambiguous PR-wide Finding identities", async () => {
+  const staleStore = await stateStore();
+  const staleId = await seedUnanchoredFinding(staleStore);
+  await staleStore.withTransaction(key, async (transaction) => {
+    const ledger = (await transaction.loadLedger())!;
+    ledger.entries[0]!.lifecycleState = "resolved";
+    await transaction.saveLedger(ledger);
+  });
+  await expect(
+    routeReviewRequest(
+      event("finding-stale", { body: `/diffowl recheck ${staleId}` }),
+      reviewIo(),
+      staleStore,
+    ),
+  ).resolves.toEqual({
+    type: "refused",
+    reason: `Finding identity ${staleId.toUpperCase()} is stale.`,
+  });
+
+  const ambiguousStore = await stateStore();
+  const firstCollision = "sha256:0000000000000000000000000000000000000000000000000000000000006fbc";
+  const secondCollision = "sha256:0000000000000000000000000000000000000000000000000000000000013203";
+  const ambiguousId = await seedUnanchoredFinding(ambiguousStore, firstCollision);
+  await ambiguousStore.withTransaction(key, async (transaction) => {
+    const ledger = (await transaction.loadLedger())!;
+    ledger.entries.push({
+      ...ledger.entries[0]!,
+      fingerprint: secondCollision,
+      summary: "Colliding short identity",
+    });
+    await transaction.saveLedger(ledger);
+  });
+  await expect(
+    routeReviewRequest(
+      event("finding-ambiguous", { body: `/diffowl recheck ${ambiguousId}` }),
+      reviewIo(),
+      ambiguousStore,
+    ),
+  ).resolves.toEqual({
+    type: "refused",
+    reason: `Finding identity ${ambiguousId.toUpperCase()} is ambiguous.`,
+  });
+});
 
 it("records an authorized Review request before acknowledging and dispatching it", async () => {
   const persistence = await stateStore();

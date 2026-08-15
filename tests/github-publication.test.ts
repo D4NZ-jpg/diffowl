@@ -571,8 +571,43 @@ function publicationAdapterTests(): void {
     expect(receipt.unanchoredFindingCount).toBe(1);
     const review = requests.find((request) => request.path.endsWith("/reviews"));
     expect(JSON.stringify(review?.body)).toContain("Findings without a current inline anchor");
-    expect(JSON.stringify(review?.body)).toContain(findingShortIdentity(finding(null)));
+    const shortId = findingShortIdentity(finding(null));
+    expect(JSON.stringify(review?.body)).toContain(shortId);
     expect(JSON.stringify(review?.body)).toContain(findingFingerprint.value);
+    expect(JSON.stringify(review?.body)).toContain(`/diffowl recheck ${shortId}`);
+    expect(JSON.stringify(review?.body)).toContain(`/diffowl reassess ${shortId} <context>`);
+  });
+
+  it("keeps a reappearing unanchored Finding in the review body after an inline thread", async () => {
+    const fingerprint = `sha256:${"c".repeat(64)}`;
+    const reappearing = {
+      ...finding(null),
+      fingerprint: { ...findingFingerprint, value: fingerprint },
+      lifecycleState: "persisting" as const,
+    };
+    const { requests, transport } = fakeTransport({
+      reviewComments: [
+        {
+          id: 51,
+          body: findingBody({ ...reappearing, location: { path: "src/handler.ts", line: 7 } }),
+          user: { login: "github-actions[bot]", type: "Bot" },
+        },
+      ],
+    });
+
+    const receipt = await publishReviewOutcome(
+      transport,
+      target,
+      { ...outcome("findings"), materialFindings: [reappearing] } as ReviewOutcome,
+      authorization,
+    );
+
+    expect(receipt.unanchoredFindingCount).toBe(1);
+    const review = requests.find((request) => request.path.endsWith("/reviews"));
+    expect(JSON.stringify(review?.body)).toContain(findingShortIdentity(reappearing));
+    expect(JSON.stringify(review?.body)).toContain(
+      `/diffowl recheck ${findingShortIdentity(reappearing)}`,
+    );
   });
 
   it("rejects an outcome that is not bound to the publication target", async () => {

@@ -169,7 +169,7 @@ it("refuses a workflow dispatch without a durable accepted Review request", asyn
   expect(JSON.parse(outputs.get("outcome") ?? "{}")).toEqual(outcome);
 });
 
-it("runs current-head Finding commands as bounded discussion work without a full Review", async () => {
+it("runs current-head PR-wide Finding commands as bounded timeline discussion work", async () => {
   const directory = await temporaryDirectories.create();
   const stateDirectory = join(directory, "state");
   const persistence = new FileSystemReviewPersistenceStore(stateDirectory);
@@ -204,7 +204,7 @@ it("runs current-head Finding commands as bounded discussion work without a full
             headSha: "head-sha",
             workType: "finding_discussion",
             findingFingerprint: fingerprint,
-            rootCommentId: "10",
+            rootCommentId: "finding-1",
             reviewedHeadSha: "head-sha",
             decision: "dispatch",
             requestId: "finding-1",
@@ -258,7 +258,7 @@ it("runs current-head Finding commands as bounded discussion work without a full
         return {
           result: "complete",
           headSha: "head-sha",
-          rootCommentId: "10",
+          rootCommentId: "finding-1",
           replyCreated: true,
           threadResolved: false,
           inlineCommentCount: 0,
@@ -282,14 +282,15 @@ it("runs current-head Finding commands as bounded discussion work without a full
   expect(validations).toBe(1);
   expect(published).toEqual([
     expect.objectContaining({
-      rootCommentId: "10",
+      rootCommentId: "finding-1",
+      rootSurface: "issue_comment",
       lifecycleState: "persisting",
       body: expect.stringContaining("rechecked"),
     }),
   ]);
   expect(JSON.parse(outputs.get("publication") ?? "{}")).toMatchObject({
     result: "complete",
-    rootCommentId: "10",
+    rootCommentId: "finding-1",
     replyCreated: true,
   });
   expect(summaries.join("\n")).toContain("**Publication result:** `complete`");
@@ -298,7 +299,7 @@ it("runs current-head Finding commands as bounded discussion work without a full
     async (transaction) => {
       expect(await transaction.loadPublicationEffects("command-finding-1")).toMatchObject({
         result: "complete",
-        rootCommentId: "10",
+        rootCommentId: "finding-1",
       });
     },
   );
@@ -446,6 +447,46 @@ it("finds durable Finding roots beyond the first GraphQL review-thread page", as
     }),
   ).resolves.toMatchObject({ result: "complete", rootCommentId: "10" });
   expect(threadQueries).toBe(2);
+});
+
+it("publishes unanchored Finding discussion updates on the pull-request timeline", async () => {
+  const requests: GitHubRequest[] = [];
+  const transport = async (request: GitHubRequest): Promise<unknown> => {
+    requests.push(request);
+    if (request.method === "GET" && request.path.endsWith("/pulls/42")) {
+      return { head: { sha: "head-sha" } };
+    }
+    if (request.method === "GET") return [];
+    return { id: 99 };
+  };
+
+  await expect(
+    publishFindingDiscussionUpdate(transport, {
+      repository: "example/repository",
+      pullRequestNumber: 42,
+      headSha: "head-sha",
+      rootCommentId: "finding-1",
+      rootSurface: "issue_comment",
+      lifecycleState: "persisting",
+      body: "Review OWL rechecked this unanchored Finding.",
+      effectMarker: "<!-- diffowl:finding-update:v1 event=finding-1 -->",
+    }),
+  ).resolves.toMatchObject({
+    result: "complete",
+    rootCommentId: "finding-1",
+    replyCreated: true,
+    threadResolved: false,
+  });
+  expect(requests).toContainEqual(
+    expect.objectContaining({
+      method: "POST",
+      path: "/repos/example/repository/issues/42/comments",
+      body: expect.objectContaining({
+        body: expect.stringContaining("Review OWL rechecked this unanchored Finding."),
+      }),
+    }),
+  );
+  expect(requests.some((request) => request.path === "/graphql")).toBe(false);
 });
 
 it("reports incomplete publication at the GraphQL review-thread ceiling", async () => {

@@ -7,6 +7,7 @@ import type {
   ValidationAttempt,
 } from "./review-engine.js";
 import { findingIdentityMarker } from "./finding-discussion.js";
+import { findingShortIdentityFromFingerprint } from "./finding-fingerprint.js";
 import { truncateUtf8 } from "./utf8.js";
 
 export type GitHubCheckConclusion =
@@ -75,7 +76,7 @@ function evidenceText(finding: MaterialFinding): string {
 }
 
 export function findingShortIdentity(finding: MaterialFinding): string {
-  return `F-${createHash("sha256").update(finding.fingerprint.value).digest("hex").slice(0, 8)}`;
+  return findingShortIdentityFromFingerprint(finding.fingerprint.value);
 }
 
 function reconciliationHint(finding: MaterialFinding): string {
@@ -87,7 +88,7 @@ function reconciliationHint(finding: MaterialFinding): string {
   return createHash("sha256").update(normalized).digest("hex").slice(0, 20);
 }
 
-export function findingBody(finding: MaterialFinding): string {
+function findingBodyWithGuidance(finding: MaterialFinding, guidance: string): string {
   const limitations = finding.verificationState.limitations;
   const verification = [
     `**${finding.verificationState.type}** — ${finding.verificationState.explanation}`,
@@ -111,12 +112,27 @@ export function findingBody(finding: MaterialFinding): string {
       "",
       `**Lifecycle state:** **${finding.lifecycleState}**`,
       "",
-      "**Recommended next action:** Confirm the evidence, address the material problem, then rerun Diffowl. If context changes the assessment, reply with `/diffowl accept`, `/diffowl rebut <context>`, `/diffowl suppress <reason>`, `/diffowl ignore <reason>`, `/diffowl resolved`, `/diffowl recheck`, `/diffowl explain`, or `/diffowl reassess <context>`.",
+      guidance,
       "",
       `Publication reconciliation hint (adapter-owned; not Finding identity): \`${reconciliationHint(finding)}\``,
     ].join("\n"),
     GITHUB_BODY_LIMIT,
   ).content;
+}
+
+export function findingBody(finding: MaterialFinding): string {
+  return findingBodyWithGuidance(
+    finding,
+    "**Recommended next action:** Confirm the evidence, address the material problem, then rerun Diffowl. If context changes the assessment, reply with `/diffowl accept`, `/diffowl rebut <context>`, `/diffowl suppress <reason>`, `/diffowl ignore <reason>`, `/diffowl resolved`, `/diffowl recheck`, `/diffowl explain`, or `/diffowl reassess <context>`.",
+  );
+}
+
+export function unanchoredFindingBody(finding: MaterialFinding): string {
+  const id = findingShortIdentity(finding);
+  return findingBodyWithGuidance(
+    finding,
+    `**Recommended next action:** Confirm the evidence and address the material problem. To continue this Finding from the pull-request timeline, comment \`/diffowl recheck ${id}\` or \`/diffowl reassess ${id} <context>\`.`,
+  );
 }
 
 function outcomeReason(outcome: ReviewOutcome): string | undefined {

@@ -1,4 +1,6 @@
+import { findingCommandAuthorizationReason } from "./finding-command-authorization.js";
 import type { PullRequestPersistenceKey, ReviewPersistenceStore } from "./persistence.js";
+import { recognizePullRequestCommand, resolvePullRequestCommand } from "./pull-request-command.js";
 import {
   parseProjectPolicy,
   PROJECT_POLICY_CEILINGS,
@@ -75,13 +77,6 @@ export type ReviewRequestResult =
 const writablePermissions = new Set<RepositoryPermission>(["write", "maintain", "admin"]);
 const dependabotLogin = /^dependabot(?:\[bot\])?$/iu;
 
-function recognizedCommand(body: string): { deprecatedAlias: boolean } | undefined {
-  const command = body.trim();
-  if (command === "/diffowl review") return { deprecatedAlias: false };
-  if (command === "/diffowl rerun") return { deprecatedAlias: true };
-  return undefined;
-}
-
 function keyFor(event: ReviewRequestEvent): PullRequestPersistenceKey {
   return { repository: event.repository, pullRequestNumber: event.pullRequestNumber };
 }
@@ -111,13 +106,19 @@ interface RouteContext {
   reason?: string | undefined;
 }
 
-async function routeContext(event: ReviewRequestEvent, io: ReviewRequestIo): Promise<RouteContext> {
+async function routeContext(
+  event: ReviewRequestEvent,
+  io: ReviewRequestIo,
+  findingCommand: boolean,
+): Promise<RouteContext> {
   const pullRequest = await io.readPullRequest(event.repository, event.pullRequestNumber);
   const permission =
-    event.actor === pullRequest.author
+    event.actor === pullRequest.author || findingCommand
       ? "read"
       : await io.readPermission(event.repository, event.actor);
-  const denied = authorizationReason(event, pullRequest, permission);
+  const denied = findingCommand
+    ? findingCommandAuthorizationReason(event, pullRequest)
+    : authorizationReason(event, pullRequest, permission);
   const policy = parseProjectPolicy(await io.readPolicy(pullRequest.baseSha));
   return {
     pullRequest,
@@ -181,32 +182,49 @@ async function dispatch(
   await saveReviewRequestEffect(persistence, key, record.eventId, "dispatchedAt", observedAt);
 }
 
+// oxlint-disable-next-line complexity
 export async function routeReviewRequest(
   event: ReviewRequestEvent,
   io: ReviewRequestIo,
   persistence: ReviewPersistenceStore,
   now = new Date(),
 ): Promise<ReviewRequestResult> {
-  const command = recognizedCommand(event.body);
+  const command = recognizePullRequestCommand(event.body);
   if (command === undefined) return { type: "ignored" };
-  const context = await routeContext(event, io);
+  const findingCommand = command.type !== "review";
+  const context = await routeContext(event, io, findingCommand);
   const observedAt =
     event.createdAt !== undefined && Number.isFinite(Date.parse(event.createdAt))
       ? new Date(event.createdAt).toISOString()
       : now.toISOString();
   const key = keyFor(event);
   await persistence.prepare?.(key);
+  const routed = await resolvePullRequestCommand(
+    command,
+    persistence,
+    key,
+    event,
+    context.pullRequest.headSha,
+    observedAt,
+  );
   const record = await persistReviewRequestDecision(persistence, key, {
     eventId: event.eventId,
     actor: event.actor,
-    command: "review",
-    deprecatedAlias: command.deprecatedAlias,
-    workType: "full_review",
+    command: routed.command,
+    deprecatedAlias: routed.deprecatedAlias,
+    workType: routed.workType,
     observedAt,
     headSha: context.pullRequest.headSha,
     cooldownSeconds: context.cooldownSeconds,
     requestTimeoutSeconds: context.requestTimeoutSeconds,
-    reason: context.reason,
+    ...(routed.findingFingerprint === undefined
+      ? {}
+      : { findingFingerprint: routed.findingFingerprint }),
+    ...(routed.findingContext === undefined ? {} : { findingContext: routed.findingContext }),
+    ...(routed.rootCommentId === undefined ? {} : { rootCommentId: routed.rootCommentId }),
+    ...(routed.reviewedHeadSha === undefined ? {} : { reviewedHeadSha: routed.reviewedHeadSha }),
+    ...(routed.discussionEvent === undefined ? {} : { discussionEvent: routed.discussionEvent }),
+    reason: context.reason ?? routed.reason,
   });
   if (record.decision === "refuse") {
     return refuse(event, io, persistence, key, record, observedAt);

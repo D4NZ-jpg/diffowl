@@ -10,6 +10,7 @@ import {
   GITHUB_BODY_LIMIT,
   findingBody,
   isActiveFinding,
+  unanchoredFindingBody,
   materialFindings,
 } from "./github-presentation.js";
 import { validatePublicationOutcome } from "./github-publication-validation.js";
@@ -205,7 +206,7 @@ function reviewBody(unanchored: MaterialFinding[]): string {
   if (unanchored.length > 0) {
     lines.push("", "### Findings without a current inline anchor");
     for (const finding of unanchored) {
-      lines.push("", findingBody(finding));
+      lines.push("", unanchoredFindingBody(finding));
     }
   }
   return lines.join("\n");
@@ -387,9 +388,7 @@ export async function publishReviewOutcome(
     (finding): finding is InlineFinding =>
       inlineFinding(finding, lines) && !roots.has(finding.fingerprint.value),
   );
-  const unanchored = active.filter(
-    (finding) => !inlineFinding(finding, lines) && !roots.has(finding.fingerprint.value),
-  );
+  const unanchored = active.filter((finding) => !inlineFinding(finding, lines));
   await assertCurrentHead(request, target);
   const findingDiscussionEffects: FindingDiscussionPublicationReceipt[] = [];
   for (const update of lifecycleUpdates(validated, roots, target)) {

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   canonicalJson,
   canonicalJsonHash,
@@ -8,6 +10,10 @@ import {
 
 export const FINDING_FINGERPRINT_VERSION = 1;
 export const FINDING_FINGERPRINT_ALGORITHM = "diffowl-finding-v1";
+
+export function findingShortIdentityFromFingerprint(fingerprint: string): string {
+  return `F-${createHash("sha256").update(fingerprint).digest("hex").slice(0, 8)}`;
+}
 
 export interface EvidenceAnchorInput {
   kind: string;

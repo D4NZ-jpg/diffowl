@@ -322,6 +322,8 @@ export async function runAction(
           pullRequestNumber: pullRequest.number,
           headSha: pullRequest.head.sha,
           rootCommentId: request.rootCommentId,
+          rootSurface:
+            request.rootCommentId === request.eventId ? "issue_comment" : "review_comment",
           lifecycleState: result.lifecycleState,
           body: result.replyBody,
           effectMarker: `<!-- diffowl:finding-update:v1 event=${request.eventId} fingerprint=${request.findingFingerprint} root=${request.rootCommentId} -->`,

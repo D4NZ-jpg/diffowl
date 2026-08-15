@@ -67,6 +67,7 @@ export interface FindingDiscussionPublicationUpdate {
   pullRequestNumber: number;
   headSha: string;
   rootCommentId: string;
+  rootSurface?: "review_comment" | "issue_comment" | undefined;
   lifecycleState: FindingLifecycleState;
   body: string;
   effectMarker: string;
@@ -165,6 +166,60 @@ async function reviewThread(
     cursor = pageInfo.endCursor;
   }
   throw new Error("Unable to reconcile the Finding discussion within 1,000 review threads.");
+}
+
+function issueMarkerExists(
+  transport: GitHubTransport,
+  update: FindingDiscussionPublicationUpdate,
+): Promise<boolean> {
+  return githubMarkerExists(
+    update.effectMarker,
+    (page) =>
+      transport({
+        method: "GET",
+        path: `/repos/${update.repository}/issues/${update.pullRequestNumber}/comments?per_page=100&page=${page}`,
+      }),
+    "GitHub issue comments",
+  );
+}
+
+async function publishIssueDiscussionUpdate(
+  transport: GitHubTransport,
+  update: FindingDiscussionPublicationUpdate,
+): Promise<FindingDiscussionPublicationReceipt> {
+  let replyCreated = await issueMarkerExists(transport, update);
+  if (!(await currentHeadMatches(transport, update))) {
+    return receipt(update, {
+      result: replyCreated ? "incomplete" : "refused",
+      replyCreated,
+      reason: "The pull-request head changed before Finding discussion publication.",
+    });
+  }
+  if (!replyCreated) {
+    try {
+      await transport({
+        method: "POST",
+        path: `/repos/${update.repository}/issues/${update.pullRequestNumber}/comments`,
+        body: {
+          body: `${update.body}\n\n${update.effectMarker}\nCommand comment: #issuecomment-${update.rootCommentId}`,
+        },
+      });
+      replyCreated = true;
+    } catch (error) {
+      return receipt(update, {
+        result: "incomplete",
+        reason: error instanceof Error ? error.message : "Finding discussion reply failed.",
+      });
+    }
+  }
+  if (!(await currentHeadMatches(transport, update))) {
+    return receipt(update, {
+      result: "incomplete",
+      replyCreated,
+      reason: "The pull-request head changed after Finding discussion publication.",
+    });
+  }
+  return receipt(update, { replyCreated });
 }
 
 function receipt(
@@ -280,6 +335,9 @@ export async function publishFindingDiscussionUpdate(
   transport: GitHubTransport,
   update: FindingDiscussionPublicationUpdate,
 ): Promise<FindingDiscussionPublicationReceipt> {
+  if (update.rootSurface === "issue_comment") {
+    return publishIssueDiscussionUpdate(transport, update);
+  }
   let replyCreated = await markerExists(
     transport,
     update.repository,

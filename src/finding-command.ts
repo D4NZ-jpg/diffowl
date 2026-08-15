@@ -1,3 +1,4 @@
+import { findingCommandAuthorizationReason } from "./finding-command-authorization.js";
 import {
   findingIdentityMarker,
   parseFindingDiscussionCommandBody,
@@ -51,8 +52,6 @@ export type FindingCommandResult =
     }
   | { type: "refused"; reason: string }
   | { type: "ignored" };
-
-const dependabotLogin = /^dependabot(?:\[bot\])?$/iu;
 
 function keyFor(event: FindingCommandEvent): PullRequestPersistenceKey {
   return { repository: event.repository, pullRequestNumber: event.pullRequestNumber };
@@ -116,24 +115,6 @@ async function findingState(
   });
 }
 
-function authorizationReason(
-  event: FindingCommandEvent,
-  pullRequest: ReviewRequestPullRequest,
-): string | undefined {
-  if (
-    pullRequest.baseRepository !== event.repository ||
-    pullRequest.headRepository !== event.repository
-  ) {
-    return "Diffowl only accepts Finding commands for same-repository pull requests.";
-  }
-  if (dependabotLogin.test(pullRequest.author) || dependabotLogin.test(event.actor)) {
-    return "Diffowl does not accept privileged Finding commands from Dependabot.";
-  }
-  return event.actor === pullRequest.author
-    ? undefined
-    : "Diffowl Finding commands must be authored by the pull-request author.";
-}
-
 async function acknowledge(
   event: FindingCommandEvent,
   io: FindingCommandIo,
@@ -182,7 +163,7 @@ export async function routeFindingCommand(
   const entry =
     fingerprint === undefined ? undefined : await findingState(persistence, key, fingerprint);
   const policy = parseProjectPolicy(await io.readPolicy(pullRequest.baseSha));
-  const denied = authorizationReason(event, pullRequest);
+  const denied = findingCommandAuthorizationReason(event, pullRequest);
   const reason =
     denied ??
     (root === undefined || recognized === undefined
