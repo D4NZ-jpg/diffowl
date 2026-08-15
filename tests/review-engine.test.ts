@@ -36,6 +36,23 @@ const effectivePolicy = {
   },
 };
 
+const suggestedPatchPolicy = {
+  ...effectivePolicy,
+  verification: {
+    validationCommands: [
+      { argv: ["npm", "test"], timeoutSeconds: 30 },
+      { argv: ["npm", "test", "--", "message"], timeoutSeconds: 20 },
+    ],
+    suggestedPatches: {
+      sandboxImage: `node@sha256:${"a".repeat(64)}`,
+      validationRules: [
+        { includePaths: ["src/message.ts"], commandIndex: 1 },
+        { includePaths: ["src/**"], commandIndex: 0 },
+      ],
+    },
+  },
+};
+
 const passingVerificationAdapter: VerificationAdapter = {
   readRepositoryFile: async () => undefined,
   executeValidation: async () => ({
@@ -74,6 +91,16 @@ const representativePullRequest: PullRequestInput = {
     contents: JSON.stringify(effectivePolicy),
   },
 };
+
+function suggestedPatchPullRequest(): PullRequestInput {
+  return {
+    ...representativePullRequest,
+    policy: {
+      ...representativePullRequest.policy,
+      contents: JSON.stringify(suggestedPatchPolicy),
+    },
+  };
+}
 
 function validationDeniedPullRequest(): PullRequestInput {
   return {
@@ -139,6 +166,23 @@ function completedRole(request: RoleExecutionRequest): RoleExecutionResult {
     },
     artifact: roleArtifact(role),
   };
+}
+
+function completedRoleWithSuggestedPatch(
+  request: RoleExecutionRequest,
+  replacement = "hello",
+  path = "src/message.ts",
+): RoleExecutionResult {
+  const result = completedRole(request);
+  if (result.type === "completed" && result.output.role === "reviewer") {
+    result.output.candidateFindings[0]!.location.path = path;
+    result.output.candidateFindings[0]!.suggestedPatch = {
+      startLine: 1,
+      endLine: 1,
+      replacement,
+    };
+  }
+  return result;
 }
 
 async function reviewedDiff(diff: string): Promise<string> {
@@ -277,6 +321,216 @@ describe("runReview role execution", () => {
         validationAttempts: [{ status: "passed" }],
       },
     });
+  });
+
+  // oxlint-disable-next-line max-lines-per-function
+  it("attaches a Suggested patch only after exact-head isolated policy validation", async () => {
+    const patchRequests: unknown[] = [];
+    const outcome = await runReview(suggestedPatchPullRequest(), {
+      credentialProfiles: { primary: { type: "env" } },
+      verificationAdapter: {
+        readRepositoryFile: async () => ({ content: "hello owl\n", truncated: false }),
+        executeValidation: passingVerificationAdapter.executeValidation,
+        validateSuggestedPatch: async (request) => {
+          patchRequests.push(request);
+          return {
+            status: "passed",
+            exitCode: 0,
+            stdout: "passed",
+            stderr: "",
+            truncated: false,
+          };
+        },
+      },
+      executeRole: async (request) => completedRoleWithSuggestedPatch(request),
+    });
+
+    expect(patchRequests).toEqual([
+      expect.objectContaining({
+        repository: reviewedPullRequest.repository,
+        headSha: reviewedPullRequest.headSha,
+        path: "src/message.ts",
+        startLine: 1,
+        endLine: 1,
+        expected: "hello owl",
+        replacement: "hello",
+        sandboxImage: `node@sha256:${"a".repeat(64)}`,
+        command: expect.objectContaining({
+          commandIndex: 1,
+          argv: ["npm", "test", "--", "message"],
+          timeoutSeconds: 20,
+        }),
+        security: expect.objectContaining({ network: "denied", secrets: "denied" }),
+      }),
+    ]);
+    expect(outcome).toMatchObject({
+      type: "findings",
+      materialFindings: [
+        {
+          suggestedPatch: {
+            path: "src/message.ts",
+            startLine: 1,
+            endLine: 1,
+            replacement: "hello",
+            reviewedHeadSha: reviewedPullRequest.headSha,
+            validation: { commandIndex: 1, status: "passed" },
+          },
+        },
+      ],
+    });
+  });
+
+  // The table keeps patch-specific failures on the same public Review-engine fallback seam.
+  // oxlint-disable-next-line max-lines-per-function
+  it("keeps invalid, stale, and unvalidated proposals as ordinary actionable Findings", async () => {
+    const pullRequestForPath = (path: string) => ({
+      ...suggestedPatchPullRequest(),
+      diff: representativePullRequest.diff.replaceAll("src/message.ts", path),
+    });
+    const cases = [
+      {
+        name: "failed proof",
+        replacement: "hello",
+        validate: async () => ({
+          status: "failed" as const,
+          exitCode: 1,
+          stdout: "",
+          stderr: "failed",
+          truncated: false,
+        }),
+      },
+      {
+        name: "stale proof",
+        replacement: "hello",
+        validate: async () => ({
+          status: "stale" as const,
+          stdout: "",
+          stderr: "",
+          truncated: false,
+        }),
+      },
+      {
+        name: "replacement above 20 lines",
+        replacement: Array.from({ length: 21 }, () => "line").join("\n"),
+        validate: async () => ({
+          status: "passed" as const,
+          exitCode: 0,
+          stdout: "passed",
+          stderr: "",
+          truncated: false,
+        }),
+      },
+      ...[
+        ["generated target", "src/generated/client.ts"],
+        ["dependency manifest", "src/package.json"],
+        ["Clojure dependency manifest", "src/deps.edn"],
+        ["credential config", "src/.npmrc"],
+        ["credential target", "src/service-secret.pem"],
+        ["permission target", "src/permissions.yaml"],
+        ["workflow target", "src/.woodpecker.yml"],
+        ["generated protobuf target", "src/api.pb.go"],
+        ["vendored target", "src/vendor/client.ts"],
+      ].map(([name, path]) => ({
+        name: name!,
+        replacement: "hello",
+        path: path!,
+        pullRequest: pullRequestForPath(path!),
+        validate: async () => ({
+          status: "passed" as const,
+          exitCode: 0,
+          stdout: "passed",
+          stderr: "",
+          truncated: false,
+        }),
+      })),
+      {
+        name: "mode change",
+        replacement: "hello",
+        pullRequest: {
+          ...suggestedPatchPullRequest(),
+          diff: representativePullRequest.diff.replace(
+            "diff --git a/src/message.ts b/src/message.ts\n",
+            "diff --git a/src/message.ts b/src/message.ts\nold mode 100644\nnew mode 100755\n",
+          ),
+        },
+        validate: async () => ({
+          status: "passed" as const,
+          exitCode: 0,
+          stdout: "passed",
+          stderr: "",
+          truncated: false,
+        }),
+      },
+      {
+        name: "generated content",
+        replacement: "hello",
+        path: "src/api/client.ts",
+        pullRequest: pullRequestForPath("src/api/client.ts"),
+        repositoryContent: "// Code generated by Example. DO NOT EDIT.\nhello owl\n",
+        validate: async () => ({
+          status: "passed" as const,
+          exitCode: 0,
+          stdout: "passed",
+          stderr: "",
+          truncated: false,
+        }),
+      },
+      {
+        name: "non-text target",
+        replacement: "hello",
+        repositoryContent: "hello �\n",
+        validate: async () => ({
+          status: "passed" as const,
+          exitCode: 0,
+          stdout: "passed",
+          stderr: "",
+          truncated: false,
+        }),
+      },
+    ];
+
+    const outcomes = await Promise.all(
+      cases.map(async (scenario) => ({
+        scenario,
+        outcome: await runReview(
+          "pullRequest" in scenario ? scenario.pullRequest : suggestedPatchPullRequest(),
+          {
+            credentialProfiles: { primary: { type: "env" } },
+            verificationAdapter: {
+              readRepositoryFile: async () => ({
+                content:
+                  "repositoryContent" in scenario ? scenario.repositoryContent : "hello owl\n",
+                truncated: false,
+              }),
+              executeValidation: passingVerificationAdapter.executeValidation,
+              validateSuggestedPatch: scenario.validate,
+            },
+            executeRole: async (request) =>
+              completedRoleWithSuggestedPatch(
+                request,
+                scenario.replacement,
+                "path" in scenario ? scenario.path : undefined,
+              ),
+          },
+        ),
+      })),
+    );
+
+    for (const { outcome } of outcomes) {
+      expect(outcome).toMatchObject({
+        type: "findings",
+        materialFindings: [
+          {
+            summary: "Greeting changes the public output",
+            lifecycleState: "new",
+          },
+        ],
+        verification: { coverageGaps: [] },
+      });
+      expect(
+        outcome.type === "findings" ? outcome.materialFindings[0].suggestedPatch : undefined,
+      ).toBeUndefined();
+    }
   });
 
   it("does not read candidate locations outside the configured review scope", async () => {
@@ -797,6 +1051,48 @@ describe("runReview policy validation", () => {
       "configuration_failure",
       "configuration_failure",
       "configuration_failure",
+    ]);
+  });
+
+  it("rejects unpinned patch sandboxes and invalid validation-rule references", async () => {
+    const invalidPatchConfigurations = [
+      {
+        sandboxImage: "node:latest",
+        validationRules: [{ includePaths: ["src/**"], commandIndex: 0 }],
+      },
+      {
+        sandboxImage: `node@sha256:${"a".repeat(64)}`,
+        validationRules: [{ includePaths: ["src/**"], commandIndex: 1 }],
+      },
+    ];
+    const outcomes = await Promise.all(
+      invalidPatchConfigurations.map((suggestedPatches) =>
+        runReview({
+          ...representativePullRequest,
+          policy: {
+            ...representativePullRequest.policy,
+            contents: JSON.stringify({
+              ...effectivePolicy,
+              verification: {
+                validationCommands: [{ argv: ["npm", "test"], timeoutSeconds: 30 }],
+                suggestedPatches,
+              },
+            }),
+          },
+        }),
+      ),
+    );
+
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        type: "configuration_failure",
+        reason:
+          "Project policy verification.suggestedPatches.sandboxImage must be a digest-pinned image.",
+      }),
+      expect.objectContaining({
+        type: "configuration_failure",
+        reason: expect.stringContaining("commandIndex must reference a validation command"),
+      }),
     ]);
   });
 

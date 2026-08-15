@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines */
 import { isJsonObject, requireJsonVersion } from "./canonical-json.js";
 import {
   parseFindingDiscussionEvent,
@@ -12,12 +13,19 @@ export type FindingDispositionState = "accepted" | "rebutted" | "suppressed";
 export type { FindingDiscussionCommand, FindingDiscussionEvent };
 export type ReviewCompletion = "completed_permitted" | "incomplete";
 
+export interface LedgerSuggestedPatch {
+  identity: string;
+  reviewedHeadSha: string;
+  validity: "validated" | "invalidated";
+}
+
 export interface LedgerFindingSnapshot {
   fingerprint: string;
   summary: string;
   locationPath?: string | undefined;
   locationLine?: number | undefined;
   reviewedHeadSha?: string | undefined;
+  suggestedPatch?: LedgerSuggestedPatch | undefined;
 }
 
 export interface FindingLedgerEntry extends LedgerFindingSnapshot {
@@ -62,6 +70,16 @@ function byFingerprint(ledger: FindingLedger | undefined): Map<string, FindingLe
   return new Map((ledger?.entries ?? []).map((entry) => [entry.fingerprint, entry]));
 }
 
+function currentSuggestedPatch(
+  snapshot: LedgerFindingSnapshot,
+  entry?: FindingLedgerEntry,
+): LedgerSuggestedPatch | undefined {
+  if (snapshot.suggestedPatch !== undefined) return snapshot.suggestedPatch;
+  return entry?.suggestedPatch === undefined
+    ? undefined
+    : { ...entry.suggestedPatch, validity: "invalidated" };
+}
+
 function currentSnapshot(
   snapshot: LedgerFindingSnapshot,
   entry?: FindingLedgerEntry,
@@ -72,6 +90,7 @@ function currentSnapshot(
     locationPath: snapshot.locationPath ?? entry?.locationPath,
     locationLine: snapshot.locationLine ?? entry?.locationLine,
     reviewedHeadSha: snapshot.reviewedHeadSha ?? entry?.reviewedHeadSha,
+    suggestedPatch: currentSuggestedPatch(snapshot, entry),
   };
 }
 
@@ -106,6 +125,10 @@ function observedMaterialState(
     return "new";
   }
   return disposedMaterialState(previous, current, reassessing) ?? "persisting";
+}
+
+function activeFindingState(state: FindingLifecycleState): boolean {
+  return state === "new" || state === "persisting" || state === "accepted";
 }
 
 function observedSuppressedState(
@@ -156,6 +179,16 @@ function observedEntry(
   };
 }
 
+function observedFindingEntry(
+  snapshot: LedgerFindingSnapshot,
+  previous: FindingLedgerEntry | undefined,
+  state: FindingLifecycleState,
+  runId: string,
+): FindingLedgerEntry {
+  const observed = observedEntry(snapshot, previous, state, runId);
+  return activeFindingState(state) ? observed : invalidatedPatchEntry(observed);
+}
+
 function assertUniqueSnapshots(snapshots: readonly LedgerFindingSnapshot[], noun: string): void {
   const fingerprints = new Set<string>();
   for (const snapshot of snapshots) {
@@ -187,20 +220,48 @@ function appendedDiscussion(
   return [...existing, ...events.filter((event) => !ids.has(event.id))];
 }
 
+function invalidatedPatchEntry(entry: FindingLedgerEntry): FindingLedgerEntry {
+  return entry.suggestedPatch === undefined
+    ? entry
+    : {
+        ...entry,
+        suggestedPatch: { ...entry.suggestedPatch, validity: "invalidated" },
+      };
+}
+
+function explicitUnobservedState(
+  entry: FindingLedgerEntry,
+  input: FindingLedgerReconciliationInput,
+  obsolete: ReadonlySet<string>,
+  resolved: ReadonlySet<string>,
+): FindingLifecycleState | undefined {
+  return (
+    input.dispositions?.[entry.fingerprint] ??
+    (resolved.has(entry.fingerprint)
+      ? "resolved"
+      : obsolete.has(entry.fingerprint)
+        ? "obsolete"
+        : undefined)
+  );
+}
+
 function unobservedEntry(
   entry: FindingLedgerEntry,
   input: FindingLedgerReconciliationInput,
   obsolete: ReadonlySet<string>,
   resolved: ReadonlySet<string>,
 ): FindingLedgerEntry {
-  const disposition = input.dispositions?.[entry.fingerprint];
-  if (disposition !== undefined) return transition(entry, disposition, input.runId);
-  if (resolved.has(entry.fingerprint)) return transition(entry, "resolved", input.runId);
-  if (obsolete.has(entry.fingerprint)) return transition(entry, "obsolete", input.runId);
+  const explicitState = explicitUnobservedState(entry, input, obsolete, resolved);
+  if (explicitState !== undefined) {
+    const updated = transition(entry, explicitState, input.runId);
+    return ["rebutted", "suppressed", "resolved", "obsolete"].includes(explicitState)
+      ? invalidatedPatchEntry(updated)
+      : updated;
+  }
   const active = entry.lifecycleState === "new" || entry.lifecycleState === "persisting";
   const reassessing = input.reassessments?.includes(entry.fingerprint) === true;
   return input.completion === "completed_permitted" && (active || reassessing)
-    ? transition(entry, "resolved", input.runId)
+    ? invalidatedPatchEntry(transition(entry, "resolved", input.runId))
     : entry;
 }
 
@@ -235,7 +296,7 @@ export function reconcileFindingLedger(input: FindingLedgerReconciliationInput):
       input.dispositions?.[fingerprint],
       reassessments.has(fingerprint),
     );
-    next.set(fingerprint, observedEntry(snapshot, prior, state, input.runId));
+    next.set(fingerprint, observedFindingEntry(snapshot, prior, state, input.runId));
   }
   for (const [fingerprint, snapshot] of suppressed) {
     const prior = previous.get(fingerprint);
@@ -244,7 +305,7 @@ export function reconcileFindingLedger(input: FindingLedgerReconciliationInput):
       input.dispositions?.[fingerprint],
       reassessments.has(fingerprint),
     );
-    next.set(fingerprint, observedEntry(snapshot, prior, state, input.runId));
+    next.set(fingerprint, observedFindingEntry(snapshot, prior, state, input.runId));
   }
 
   for (const entry of previous.values()) {
@@ -269,6 +330,21 @@ function parseDiscussion(value: unknown): FindingDiscussionEvent[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw new Error("Finding discussion must be an array.");
   return value.map(parseFindingDiscussionEvent);
+}
+
+function parseSuggestedPatch(value: unknown): LedgerSuggestedPatch | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !isJsonObject(value) ||
+    typeof value.identity !== "string" ||
+    !/^sha256:[\da-f]{64}$/u.test(value.identity) ||
+    typeof value.reviewedHeadSha !== "string" ||
+    value.reviewedHeadSha.length === 0 ||
+    (value.validity !== "validated" && value.validity !== "invalidated")
+  ) {
+    throw new Error("Finding ledger Suggested patch is invalid.");
+  }
+  return value as unknown as LedgerSuggestedPatch;
 }
 
 // oxlint-disable-next-line complexity
@@ -296,6 +372,7 @@ function parseEntry(value: unknown): FindingLedgerEntry {
   return {
     ...(value as unknown as FindingLedgerEntry),
     discussion: parseDiscussion(value.discussion),
+    suggestedPatch: parseSuggestedPatch(value.suggestedPatch),
   };
 }
 

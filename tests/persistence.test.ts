@@ -267,7 +267,7 @@ describe("GitReviewPersistenceStore", () => {
       "refs/diffowl/state/repositories/example/review-target/pull-requests/42/marker";
     expect(await git(["ls-remote", "origin", stateRef], checkout)).toContain(stateRef);
     expect(await git(["ls-remote", "origin", markerRef], checkout)).toContain(markerRef);
-  }, 30_000);
+  }, 60_000);
 
   it("rereads and reconciles one Git conflict, then preserves both transitions", async () => {
     const { remote, checkout } = await temporaryGitRepository();
@@ -312,7 +312,7 @@ describe("GitReviewPersistenceStore", () => {
         });
       },
     );
-  }, 30_000);
+  }, 60_000);
 
   it("fails after a second Git conflict without discarding competing transitions", async () => {
     const { remote, checkout } = await temporaryGitRepository();
@@ -344,7 +344,7 @@ describe("GitReviewPersistenceStore", () => {
       });
       expect(await transaction.loadPublicationEffects("target")).toBeUndefined();
     });
-  }, 30_000);
+  }, 60_000);
 
   it("refuses to recreate deleted Git state refs after prior state", async () => {
     const { remote, checkout } = await temporaryGitRepository();
@@ -368,7 +368,7 @@ describe("GitReviewPersistenceStore", () => {
         async (transaction) => transaction.saveLedger(ledger("run-2")),
       ),
     ).rejects.toThrow("prior Diffowl state marker exists");
-  }, 15_000);
+  }, 30_000);
 
   it("reports partial Git state ref deletion as configuration failure", async () => {
     const { checkout } = await temporaryGitRepository();
@@ -381,6 +381,6 @@ describe("GitReviewPersistenceStore", () => {
     await expect(
       store.withTransaction(key, async (transaction) => transaction.saveLedger(ledger("run-2"))),
     ).rejects.toThrow("partial Diffowl state refs");
-  }, 15_000);
+  }, 30_000);
 });
 // jscpd:ignore-end

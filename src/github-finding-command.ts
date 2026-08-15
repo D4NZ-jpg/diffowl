@@ -59,6 +59,7 @@ export interface FindingReplacementTarget {
   headSha: string;
   path: string;
   line: number;
+  startLine?: number | undefined;
   body: string;
 }
 
@@ -319,6 +320,9 @@ async function createReplacement(
         path: replacement.path,
         line: replacement.line,
         side: "RIGHT",
+        ...(replacement.startLine === undefined
+          ? {}
+          : { start_line: replacement.startLine, start_side: "RIGHT" }),
         body: `${replacement.body}\n\n${marker}\nContinues the original Finding discussion: ${originalUrl}`,
       },
     }),
@@ -395,6 +399,26 @@ export async function publishFindingDiscussionUpdate(
       });
     }
   }
+  let replacementRootCommentId: string | undefined;
+  if (update.replacement !== undefined) {
+    try {
+      replacementRootCommentId = await createReplacement(transport, update);
+      if (!(await currentHeadMatches(transport, update))) {
+        return receipt(update, {
+          result: "incomplete",
+          replyCreated,
+          replacementRootCommentId,
+          reason: "The pull-request head changed after Finding replacement publication.",
+        });
+      }
+    } catch (error) {
+      return receipt(update, {
+        result: "incomplete",
+        replyCreated,
+        reason: error instanceof Error ? error.message : "Finding replacement publication failed.",
+      });
+    }
+  }
   let thread: Awaited<ReturnType<typeof reviewThread>>;
   try {
     thread = await reviewThread(transport, update);
@@ -402,6 +426,7 @@ export async function publishFindingDiscussionUpdate(
     return receipt(update, {
       result: "incomplete",
       replyCreated,
+      ...(replacementRootCommentId === undefined ? {} : { replacementRootCommentId }),
       reason: error instanceof Error ? error.message : "Finding thread lookup failed.",
     });
   }
@@ -414,6 +439,7 @@ export async function publishFindingDiscussionUpdate(
         return receipt(update, {
           result: "incomplete",
           replyCreated,
+          ...(replacementRootCommentId === undefined ? {} : { replacementRootCommentId }),
           threadResolved: thread.isResolved,
           reason: "The pull-request head changed before Finding thread disposition.",
         });
@@ -424,15 +450,21 @@ export async function publishFindingDiscussionUpdate(
       return receipt(update, {
         result: "incomplete",
         replyCreated,
+        ...(replacementRootCommentId === undefined ? {} : { replacementRootCommentId }),
         threadResolved: terminal,
         reason: "The pull-request head changed after Finding discussion publication.",
       });
     }
-    return receipt(update, { replyCreated, threadResolved: terminal });
+    return receipt(update, {
+      replyCreated,
+      ...(replacementRootCommentId === undefined ? {} : { replacementRootCommentId }),
+      threadResolved: terminal,
+    });
   } catch (error) {
     return receipt(update, {
       result: "incomplete",
       replyCreated,
+      ...(replacementRootCommentId === undefined ? {} : { replacementRootCommentId }),
       threadResolved: thread.isResolved,
       reason: error instanceof Error ? error.message : "Finding thread disposition failed.",
     });

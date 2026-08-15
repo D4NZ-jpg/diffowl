@@ -1,5 +1,7 @@
+/* oxlint-disable max-lines */
 import { z } from "zod";
 
+import { isJsonObject } from "./canonical-json.js";
 import type { ReviewOutcome } from "./review-engine.js";
 
 const nonEmptyString = z.string().min(1);
@@ -102,6 +104,17 @@ const projectPolicySchema = z.strictObject({
         timeoutSeconds: positiveInteger,
       }),
     ),
+    suggestedPatches: z
+      .strictObject({
+        sandboxImage: nonEmptyString,
+        validationRules: z.array(
+          z.strictObject({
+            includePaths: z.array(nonEmptyString),
+            commandIndex: nonNegativeInteger,
+          }),
+        ),
+      })
+      .optional(),
   }),
   roleProfiles: z.strictObject({
     reviewer: roleProfileSchema,
@@ -112,6 +125,7 @@ const projectPolicySchema = z.strictObject({
 
 const locationSchema = z.strictObject({
   path: nonEmptyString,
+  startLine: positiveInteger.optional(),
   line: positiveInteger.optional(),
 });
 const evidenceSchema = z.discriminatedUnion("type", [
@@ -155,6 +169,20 @@ const fingerprintSchema = z.strictObject({
   value: nonEmptyString,
   components: z.unknown(),
 });
+const suggestedPatchSchema = z.strictObject({
+  id: nonEmptyString,
+  path: nonEmptyString,
+  startLine: positiveInteger,
+  endLine: positiveInteger,
+  replacement: z.string(),
+  reviewedHeadSha: nonEmptyString,
+  sourceHash: nonEmptyString,
+  validation: z.strictObject({
+    commandIndex: nonNegativeInteger,
+    commandHash: nonEmptyString,
+    status: z.literal("passed"),
+  }),
+});
 const findingSchema = z.strictObject({
   fingerprint: fingerprintSchema,
   summary: nonEmptyString,
@@ -171,6 +199,7 @@ const findingSchema = z.strictObject({
     "suppressed",
   ]),
   verificationState: verificationStateSchema,
+  suggestedPatch: suggestedPatchSchema.optional(),
 });
 const advisorySchema = z.strictObject({
   summary: nonEmptyString,
@@ -298,7 +327,28 @@ export const githubReviewOutcomeSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+function omitMalformedOptionalPatches(value: unknown): unknown {
+  if (!isJsonObject(value)) return value;
+  const materialFindings = value.materialFindings;
+  if (!Array.isArray(materialFindings)) return value;
+  return {
+    ...value,
+    materialFindings: materialFindings.map((item: unknown) => {
+      const finding = isJsonObject(item) ? item : undefined;
+      if (
+        finding === undefined ||
+        finding.suggestedPatch === undefined ||
+        suggestedPatchSchema.safeParse(finding.suggestedPatch).success
+      ) {
+        return item;
+      }
+      const { suggestedPatch: _suggestedPatch, ...ordinaryFinding } = finding;
+      return ordinaryFinding;
+    }),
+  };
+}
+
 export function parseGitHubReviewOutcome(value: unknown): ReviewOutcome | undefined {
-  const result = githubReviewOutcomeSchema.safeParse(value);
+  const result = githubReviewOutcomeSchema.safeParse(omitMalformedOptionalPatches(value));
   return result.success ? (result.data as ReviewOutcome) : undefined;
 }

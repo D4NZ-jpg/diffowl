@@ -80,6 +80,33 @@ function finding(line: number | null = 7): MaterialFinding {
   };
 }
 
+function findingWithSuggestedPatch(replacement: string): MaterialFinding {
+  return {
+    ...finding(),
+    location: { path: "src/handler.ts", startLine: 6, line: 7 },
+    suggestedPatch: {
+      id: `sha256:${"a".repeat(64)}`,
+      path: "src/handler.ts",
+      startLine: 6,
+      endLine: 7,
+      replacement,
+      reviewedHeadSha: target.headSha,
+      sourceHash: `sha256:${"b".repeat(64)}`,
+      validation: {
+        commandIndex: 0,
+        commandHash: `sha256:${"c".repeat(64)}`,
+        status: "passed",
+      },
+    },
+  };
+}
+
+function expectOrdinaryFindingReview(requests: GitHubRequest[]): void {
+  const review = requests.find((request) => request.path.endsWith("/reviews"));
+  expect(JSON.stringify(review?.body)).not.toContain("```suggestion");
+  expect(JSON.stringify(review?.body)).toContain("Null input crashes");
+}
+
 // Exhaustive factory intentionally keeps all outcome fixtures beside their mapping assertion.
 // oxlint-disable-next-line complexity, max-lines-per-function
 function outcome(type: ReviewOutcome["type"]): ReviewOutcome {
@@ -503,6 +530,131 @@ function publicationAdapterTests(): void {
     expect(findingsOutcome).not.toHaveProperty("publication");
   });
 
+  it("publishes a validated multi-line Suggested patch without writing the branch", async () => {
+    const { requests, transport } = fakeTransport();
+    const patchedFinding = findingWithSuggestedPatch("if (input == null) return;\nhandle(input);");
+    const patchedOutcome = {
+      ...outcome("findings"),
+      materialFindings: [patchedFinding],
+    } as ReviewOutcome;
+
+    await publishReviewOutcome(
+      transport,
+      { ...target, changedLines: [{ path: "src/handler.ts", line: 6 }, ...target.changedLines] },
+      patchedOutcome,
+      authorization,
+    );
+
+    const review = requests.find((request) => request.path.endsWith("/reviews"));
+    expect(review?.body).toMatchObject({
+      event: "COMMENT",
+      comments: [
+        expect.objectContaining({
+          path: "src/handler.ts",
+          start_line: 6,
+          start_side: "RIGHT",
+          line: 7,
+          side: "RIGHT",
+          body: expect.stringContaining(
+            "```suggestion\nif (input == null) return;\nhandle(input);\n```",
+          ),
+        }),
+      ],
+    });
+    expect(
+      requests.some(
+        (request) =>
+          request.method !== "GET" &&
+          !request.path.endsWith("/reviews") &&
+          !request.path.includes("/comments"),
+      ),
+    ).toBe(false);
+  });
+
+  it("anchors a Suggested patch on its changed end line within a wider Finding range", async () => {
+    const { requests, transport } = fakeTransport();
+    const patchedFinding = findingWithSuggestedPatch("guard(input);\nhandle(input);");
+    patchedFinding.location = { path: "src/handler.ts", startLine: 6, line: 8 };
+
+    await publishReviewOutcome(
+      transport,
+      {
+        ...target,
+        changedLines: [
+          { path: "src/handler.ts", line: 6 },
+          { path: "src/handler.ts", line: 7 },
+        ],
+      },
+      { ...outcome("findings"), materialFindings: [patchedFinding] },
+      authorization,
+    );
+
+    const review = requests.find((request) => request.path.endsWith("/reviews"));
+    expect(review?.body).toMatchObject({
+      comments: [expect.objectContaining({ start_line: 6, line: 7 })],
+    });
+  });
+
+  it("falls back to an ordinary Finding instead of truncating suggestion syntax", async () => {
+    const { requests, transport } = fakeTransport();
+    const patchedFinding = findingWithSuggestedPatch("x".repeat(12_000));
+    patchedFinding.evidence = Array.from({ length: 28 }, (_, index) => ({
+      id: `evidence-${index}`,
+      type: "repository_file" as const,
+      path: patchedFinding.location.path,
+      content: "e".repeat(2_000),
+      truncated: false,
+    }));
+
+    const receipt = await publishReviewOutcome(
+      transport,
+      { ...target, changedLines: [{ path: "src/handler.ts", line: 6 }, ...target.changedLines] },
+      { ...outcome("findings"), materialFindings: [patchedFinding] },
+      authorization,
+    );
+
+    expect(receipt).toMatchObject({ result: "complete", inlineCommentCount: 1 });
+    expectOrdinaryFindingReview(requests);
+  });
+
+  it("falls back to an ordinary Finding for malformed or stale optional patches", async () => {
+    const malformed = {
+      ...outcome("findings"),
+      materialFindings: [{ ...finding(), suggestedPatch: "model-forged" }],
+    };
+    const staleFinding: MaterialFinding = {
+      ...finding(),
+      suggestedPatch: {
+        id: `sha256:${"a".repeat(64)}`,
+        path: "src/handler.ts",
+        startLine: 7,
+        endLine: 7,
+        replacement: "safe(input);",
+        reviewedHeadSha: "older-head",
+        sourceHash: `sha256:${"b".repeat(64)}`,
+        validation: {
+          commandIndex: 0,
+          commandHash: `sha256:${"c".repeat(64)}`,
+          status: "passed",
+        },
+      },
+    };
+
+    const publications = await Promise.all(
+      [malformed, { ...outcome("findings"), materialFindings: [staleFinding] }].map(
+        async (candidate) => {
+          const { requests, transport } = fakeTransport();
+          const receipt = await publishReviewOutcome(transport, target, candidate, authorization);
+          return { receipt, requests };
+        },
+      ),
+    );
+    for (const { receipt, requests } of publications) {
+      expect(receipt).toMatchObject({ result: "complete", inlineCommentCount: 1 });
+      expectOrdinaryFindingReview(requests);
+    }
+  });
+
   it("publishes a valid outcome containing 64 KiB evidence without a duplicate check", async () => {
     const { requests, transport } = fakeTransport();
     await expect(
@@ -805,12 +957,12 @@ function publicationAdapterTests(): void {
     expect(JSON.stringify(review?.body)).toContain("Findings without a current inline anchor");
   });
 
-  // oxlint-disable-next-line max-lines-per-function
+  // oxlint-disable-next-line complexity, max-lines-per-function
   it("retains confirmed Finding discussion effects when later review publication fails", async () => {
     const existingFingerprint = `sha256:${"a".repeat(64)}`;
     const newFingerprint = `sha256:${"b".repeat(64)}`;
     const existingFinding = {
-      ...finding(7),
+      ...findingWithSuggestedPatch("guard(input);\nhandle(input);"),
       fingerprint: { ...findingFingerprint, value: existingFingerprint },
       lifecycleState: "persisting" as const,
     };
@@ -838,7 +990,12 @@ function publicationAdapterTests(): void {
         ledgerTransitions: [{ fingerprint: existingFingerprint, lifecycleState: "persisting" }],
       },
     } as unknown as ReviewOutcome;
+    const requests: GitHubRequest[] = [];
+    let replacementBody: string | undefined;
+    // This transport keeps all lifecycle, replacement, and failure surfaces in one public-seam test.
+    // oxlint-disable-next-line complexity
     const transport: GitHubTransport = async (request) => {
+      requests.push(request);
       if (request.method === "GET" && /\/pulls\/\d+$/u.test(request.path)) {
         return { head: { sha: target.headSha } };
       }
@@ -849,10 +1006,23 @@ function publicationAdapterTests(): void {
             body: `<!-- diffowl:finding:v1 fingerprint=${existingFingerprint} -->\n${FINDING_COMMENT_MARKER}`,
             user: { login: "github-actions[bot]", type: "Bot" },
           },
+          ...(replacementBody === undefined
+            ? []
+            : [
+                {
+                  id: 11,
+                  body: replacementBody,
+                  user: { login: "github-actions[bot]", type: "Bot" },
+                },
+              ]),
         ];
       }
       if (request.method === "GET" && request.path.includes("/reviews")) return [];
       if (request.path.endsWith("/10/replies")) return {};
+      if (request.method === "POST" && /\/pulls\/\d+\/comments$/u.test(request.path)) {
+        replacementBody = (request.body as { body: string }).body;
+        return { id: 11 };
+      }
       if (request.path === "/graphql") {
         return {
           data: {
@@ -878,16 +1048,43 @@ function publicationAdapterTests(): void {
     };
 
     await expect(
-      publishReviewOutcome(transport, target, reviewOutcome, authorization),
+      publishReviewOutcome(
+        transport,
+        { ...target, changedLines: [{ path: "src/handler.ts", line: 6 }, ...target.changedLines] },
+        reviewOutcome,
+        authorization,
+      ),
     ).rejects.toMatchObject({
       confirmedEffects: {
         result: "incomplete",
         findingDiscussionEffects: [
-          expect.objectContaining({ rootCommentId: "10", replyCreated: true }),
+          expect.objectContaining({
+            rootCommentId: "10",
+            replyCreated: true,
+            replacementRootCommentId: "11",
+          }),
         ],
         reviewEffectId: expect.stringMatching(/^sha256:[\da-f]{64}$/u),
       },
     });
+    const replacement = requests.find(
+      (request) => request.method === "POST" && /\/pulls\/\d+\/comments$/u.test(request.path),
+    );
+    expect(JSON.stringify(replacement?.body)).toContain("```suggestion");
+
+    await expect(
+      publishReviewOutcome(
+        transport,
+        { ...target, changedLines: [{ path: "src/handler.ts", line: 6 }, ...target.changedLines] },
+        reviewOutcome,
+        authorization,
+      ),
+    ).rejects.toBeInstanceOf(IncompletePublicationError);
+    expect(
+      requests.filter(
+        (request) => request.method === "POST" && /\/pulls\/\d+\/comments$/u.test(request.path),
+      ),
+    ).toHaveLength(1);
   });
 
   it("does not create a summary comment when review publication fails", async () => {

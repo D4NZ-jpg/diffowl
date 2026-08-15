@@ -8,6 +8,13 @@ import {
   type ReviewRole,
   type RoleProfile,
 } from "./project-policy.js";
+import {
+  attachSuggestedPatches,
+  type SuggestedPatch,
+  type SuggestedPatchProposal,
+  type SuggestedPatchValidationRequest,
+  type SuggestedPatchValidationResult,
+} from "./suggested-patch.js";
 import { truncateUtf8 } from "./utf8.js";
 
 export type DiffowlStoredCredential =
@@ -47,6 +54,7 @@ export interface ReviewedPullRequest {
 
 export interface CandidateLocation {
   path: string;
+  startLine?: number | undefined;
   line?: number | undefined;
 }
 
@@ -66,6 +74,7 @@ export interface CandidateDraft {
   impact: string;
   evidence: string[];
   fingerprintContext?: CandidateFingerprintContext | undefined;
+  suggestedPatch?: SuggestedPatchProposal | undefined;
 }
 
 export type VerificationEvidence =
@@ -106,6 +115,7 @@ export interface MaterialFinding {
   evidence: VerificationEvidence[];
   lifecycleState: FindingLifecycleState;
   verificationState: FindingVerificationState;
+  suggestedPatch?: SuggestedPatch | undefined;
 }
 
 export interface AdvisorySuggestion {
@@ -201,6 +211,9 @@ export interface VerificationAdapter {
   executeValidation(
     request: ValidationExecutionRequest,
   ): Promise<Omit<ValidationAttempt, "commandIndex" | "argv" | "timeoutSeconds">>;
+  validateSuggestedPatch?(
+    request: SuggestedPatchValidationRequest,
+  ): Promise<SuggestedPatchValidationResult>;
 }
 
 export interface RoleExecutionRequest {
@@ -870,6 +883,17 @@ export async function orchestrateReviewRoles(
     state.assessments,
     verification,
   );
+  await attachSuggestedPatches({
+    pullRequest,
+    diff,
+    policy,
+    candidatesByFingerprint: new Map(
+      state.candidates.map((candidate) => [candidateFingerprint(candidate).value, candidate]),
+    ),
+    findings: verified.findings,
+    adapter: verificationAdapter,
+    signal,
+  });
   const abstention = abstentionResult(verified, verification, artifacts);
   if (abstention !== undefined) return abstention;
   return {

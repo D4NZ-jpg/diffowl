@@ -42,6 +42,16 @@ export interface ValidationCommand {
   timeoutSeconds: number;
 }
 
+export interface SuggestedPatchValidationRule {
+  includePaths: string[];
+  commandIndex: number;
+}
+
+export interface SuggestedPatchPolicy {
+  sandboxImage: string;
+  validationRules: SuggestedPatchValidationRule[];
+}
+
 export interface ProjectPolicy {
   version: 1;
   scope: {
@@ -54,6 +64,7 @@ export interface ProjectPolicy {
   };
   verification: {
     validationCommands: ValidationCommand[];
+    suggestedPatches?: SuggestedPatchPolicy | undefined;
   };
   roleProfiles: RoleProfiles;
   reviewRequests?: {
@@ -137,9 +148,56 @@ function validateValidationCommand(value: unknown, index: number): string | unde
     : undefined;
 }
 
+// Closed nested policy validation checks each required field and rule reference.
+// oxlint-disable-next-line complexity
+function validateSuggestedPatches(value: unknown, commandCount: number): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return "Project policy verification.suggestedPatches must be an object.";
+  const fieldError = unsupportedField(
+    value,
+    ["sandboxImage", "validationRules"],
+    "verification.suggestedPatches",
+  );
+  if (fieldError !== undefined) return fieldError;
+  if (
+    typeof value.sandboxImage !== "string" ||
+    !/^[^@\s]+@sha256:[\da-f]{64}$/u.test(value.sandboxImage)
+  ) {
+    return "Project policy verification.suggestedPatches.sandboxImage must be a digest-pinned image.";
+  }
+  if (
+    !Array.isArray(value.validationRules) ||
+    value.validationRules.length > PROJECT_POLICY_CEILINGS.validationCommandCount
+  ) {
+    return `Project policy verification.suggestedPatches.validationRules must be an array with at most ${PROJECT_POLICY_CEILINGS.validationCommandCount} rules.`;
+  }
+  for (const [index, rule] of value.validationRules.entries()) {
+    const location = `verification.suggestedPatches.validationRules[${index}]`;
+    if (!isRecord(rule)) return `Project policy ${location} must be an object.`;
+    const ruleField = unsupportedField(rule, ["includePaths", "commandIndex"], location);
+    if (ruleField !== undefined) return ruleField;
+    if (!isStringArray(rule.includePaths)) {
+      return `Project policy ${location}.includePaths must be an array of non-empty strings.`;
+    }
+    if (
+      typeof rule.commandIndex !== "number" ||
+      !Number.isInteger(rule.commandIndex) ||
+      rule.commandIndex < 0 ||
+      rule.commandIndex >= commandCount
+    ) {
+      return `Project policy ${location}.commandIndex must reference a validation command.`;
+    }
+  }
+  return undefined;
+}
+
 function validateVerification(value: unknown, reviewTimeoutSeconds: unknown): string | undefined {
   if (!isRecord(value)) return "Project policy verification must be an object.";
-  const fieldError = unsupportedField(value, ["validationCommands"], "verification");
+  const fieldError = unsupportedField(
+    value,
+    ["validationCommands", "suggestedPatches"],
+    "verification",
+  );
   if (fieldError !== undefined) return fieldError;
   if (!Array.isArray(value.validationCommands)) {
     return "Project policy verification.validationCommands must be an array.";
@@ -151,6 +209,11 @@ function validateVerification(value: unknown, reviewTimeoutSeconds: unknown): st
     .map((command, index) => validateValidationCommand(command, index))
     .find(Boolean);
   if (commandError !== undefined) return commandError;
+  const patchError = validateSuggestedPatches(
+    value.suggestedPatches,
+    value.validationCommands.length,
+  );
+  if (patchError !== undefined) return patchError;
   if (!isPositiveInteger(reviewTimeoutSeconds)) return undefined;
   const tooLongIndex = value.validationCommands.findIndex(
     (command) =>

@@ -88,36 +88,55 @@ function reconciliationHint(finding: MaterialFinding): string {
   return createHash("sha256").update(normalized).digest("hex").slice(0, 20);
 }
 
+function suggestedPatchText(finding: MaterialFinding): string[] {
+  const patch = finding.suggestedPatch;
+  return patch === undefined
+    ? []
+    : [
+        "",
+        "**Suggested patch (validated at the reviewed revision):**",
+        "",
+        "```suggestion",
+        patch.replacement,
+        "```",
+        "",
+        "Applying this suggestion is the pull-request author's choice. Review OWL never writes the branch.",
+      ];
+}
+
 function findingBodyWithGuidance(finding: MaterialFinding, guidance: string): string {
   const limitations = finding.verificationState.limitations;
   const verification = [
     `**${finding.verificationState.type}** — ${finding.verificationState.explanation}`,
     ...(limitations.length === 0 ? [] : [`Limitations: ${limitations.join("; ")}`]),
   ].join("\n");
-  return truncateUtf8(
-    [
-      findingIdentityMarker(finding.fingerprint.value),
-      FINDING_COMMENT_MARKER,
-      "",
-      `**Finding ID:** \`${findingShortIdentity(finding)}\``,
-      "",
-      `**Problem:** ${finding.summary}`,
-      "",
-      `**Impact:** ${finding.impact}`,
-      "",
-      "**Evidence:**",
-      evidenceText(finding),
-      "",
-      `**Verification state:** ${verification}`,
-      "",
-      `**Lifecycle state:** **${finding.lifecycleState}**`,
-      "",
-      guidance,
-      "",
-      `Publication reconciliation hint (adapter-owned; not Finding identity): \`${reconciliationHint(finding)}\``,
-    ].join("\n"),
-    GITHUB_BODY_LIMIT,
-  ).content;
+  const body = [
+    findingIdentityMarker(finding.fingerprint.value),
+    FINDING_COMMENT_MARKER,
+    "",
+    `**Finding ID:** \`${findingShortIdentity(finding)}\``,
+    "",
+    `**Problem:** ${finding.summary}`,
+    "",
+    `**Impact:** ${finding.impact}`,
+    "",
+    "**Evidence:**",
+    evidenceText(finding),
+    "",
+    `**Verification state:** ${verification}`,
+    "",
+    `**Lifecycle state:** **${finding.lifecycleState}**`,
+    ...suggestedPatchText(finding),
+    "",
+    guidance,
+    "",
+    `Publication reconciliation hint (adapter-owned; not Finding identity): \`${reconciliationHint(finding)}\``,
+  ].join("\n");
+  if (finding.suggestedPatch !== undefined && Buffer.byteLength(body) > GITHUB_BODY_LIMIT) {
+    const { suggestedPatch: _suggestedPatch, ...ordinaryFinding } = finding;
+    return findingBodyWithGuidance(ordinaryFinding, guidance);
+  }
+  return truncateUtf8(body, GITHUB_BODY_LIMIT).content;
 }
 
 export function findingBody(finding: MaterialFinding): string {

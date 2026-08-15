@@ -45,8 +45,17 @@ export type {
   ReviewRole,
   RoleProfile,
   RoleProfiles,
+  SuggestedPatchPolicy,
+  SuggestedPatchValidationRule,
+  ValidationCommand,
 } from "./project-policy.js";
 export { PROJECT_POLICY_CEILINGS, PROJECT_POLICY_PATH } from "./project-policy.js";
+export type {
+  SuggestedPatch,
+  SuggestedPatchProposal,
+  SuggestedPatchValidationRequest,
+  SuggestedPatchValidationResult,
+} from "./suggested-patch.js";
 export type {
   AdvisorySuggestion,
   CandidateDraft,
@@ -142,6 +151,7 @@ export type {
   FindingDiscussionEvent,
   FindingDispositionState,
   LedgerFindingSnapshot,
+  LedgerSuggestedPatch,
 } from "./finding-ledger.js";
 export type {
   FindingDiscussionCommand,
@@ -297,6 +307,7 @@ function ledgerSnapshot(
     location?: { path: string; line?: number | undefined } | undefined;
     locationPath?: string | undefined;
     locationLine?: number | undefined;
+    suggestedPatch?: { id: string; reviewedHeadSha: string } | undefined;
   },
   reviewedHeadSha: string,
 ): LedgerFindingSnapshot {
@@ -306,6 +317,15 @@ function ledgerSnapshot(
     locationPath: finding.location?.path ?? finding.locationPath,
     locationLine: finding.location?.line ?? finding.locationLine,
     reviewedHeadSha,
+    ...(finding.suggestedPatch === undefined
+      ? {}
+      : {
+          suggestedPatch: {
+            identity: finding.suggestedPatch.id,
+            reviewedHeadSha: finding.suggestedPatch.reviewedHeadSha,
+            validity: "validated" as const,
+          },
+        }),
   };
 }
 

@@ -214,6 +214,50 @@ it("records audited discussion events and resolved author dispositions", () => {
   });
 });
 
+it("preserves Suggested patch identity and invalidates stale proof", () => {
+  const identity = `sha256:${"a".repeat(64)}`;
+  const first = reconcileFindingLedger({
+    runId: "run-1",
+    completion: "completed_permitted",
+    materialFindings: [
+      {
+        ...finding("patched"),
+        reviewedHeadSha: "head-1",
+        suggestedPatch: { identity, reviewedHeadSha: "head-1", validity: "validated" },
+      },
+    ],
+  });
+  expect(parseFindingLedger(first).entries[0]?.suggestedPatch).toEqual({
+    identity,
+    reviewedHeadSha: "head-1",
+    validity: "validated",
+  });
+
+  const next = reconcileFindingLedger({
+    previous: first,
+    runId: "run-2",
+    completion: "completed_permitted",
+    materialFindings: [{ ...finding("patched"), reviewedHeadSha: "head-2" }],
+  });
+  expect(next.entries[0]?.suggestedPatch).toEqual({
+    identity,
+    reviewedHeadSha: "head-1",
+    validity: "invalidated",
+  });
+
+  const rebutted = reconcileFindingLedger({
+    previous: first,
+    runId: "run-3",
+    completion: "completed_permitted",
+    materialFindings: first.entries,
+    dispositions: { patched: "rebutted" },
+  });
+  expect(rebutted.entries[0]).toMatchObject({
+    lifecycleState: "rebutted",
+    suggestedPatch: { identity, validity: "invalidated" },
+  });
+});
+
 it("rejects corrupt ledgers", () => {
   expect(() => parseFindingLedger({ version: 2, entries: [] })).toThrow("version must be 1");
   expect(() => parseFindingLedger({ version: 1, entries: [{ fingerprint: "x" }] })).toThrow(

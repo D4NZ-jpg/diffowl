@@ -22,6 +22,7 @@ import type { ReviewRole } from "./project-policy.js";
 
 const locationSchema = z.object({
   path: z.string().min(1),
+  startLine: z.number().int().positive().optional(),
   line: z.number().int().positive().optional(),
 });
 
@@ -39,6 +40,13 @@ const candidateSchema = z.object({
       api: z.string().min(1).optional(),
       configKey: z.string().min(1).optional(),
       behavior: z.string().min(1).optional(),
+    })
+    .optional(),
+  suggestedPatch: z
+    .object({
+      startLine: z.number().int().positive(),
+      endLine: z.number().int().positive(),
+      replacement: z.string(),
     })
     .optional(),
 });
@@ -105,7 +113,7 @@ const defaultPrimitives: RunCellPrimitives = {
 
 const rolePrompts: Record<ReviewRole, string> = {
   reviewer:
-    "Generate structured candidate material findings and separate non-blocking advisory suggestions. Cite only evidence available in the supplied pull-request context. For each candidate provide stable fingerprint context when known: claim kind, affected area, applicable policy or capability, and symbol/API/configuration/behavior location context. Never use line numbers or provider/thread identifiers as fingerprint context.",
+    "Generate structured candidate material findings and separate non-blocking advisory suggestions. Cite only evidence available in the supplied pull-request context. For each candidate provide stable fingerprint context when known: claim kind, affected area, applicable policy or capability, and symbol/API/configuration/behavior location context. Never use line numbers or provider/thread identifiers as fingerprint context. A candidate may propose one contiguous Suggested patch replacement within its changed-line location; provide only startLine, endLine, and replacement. Never choose a file path, validation command, or proof.",
   challenger:
     "Challenge each candidate for false positives, weak evidence, and low materiality. Support, reject, or downgrade every candidate you can assess.",
   verifier:

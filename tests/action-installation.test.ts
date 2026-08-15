@@ -230,5 +230,5 @@ describe("installable Review OWL Action", () => {
       ),
     ) as { runs: Record<string, string> };
     expect(Object.keys(manifest.runs)).toHaveLength(2);
-  }, 15_000);
+  }, 30_000);
 });

@@ -498,6 +498,96 @@ it("publishes, reports, and persists adapter-owned receipts when a publisher is 
   );
 });
 
+// The Action seam intentionally keeps generation, validation, persistence, and publication visible.
+// oxlint-disable-next-line max-lines-per-function
+it("carries an isolated exact-head Suggested patch through the Action publication seam", async () => {
+  const stateDirectory = await stateDirectories.create();
+  let publishedFinding: unknown;
+  const patchPolicy = JSON.stringify(
+    projectPolicy({
+      verification: {
+        validationCommands: [{ argv: ["npm", "test"], timeoutSeconds: 30 }],
+        suggestedPatches: {
+          sandboxImage: `node@sha256:${"a".repeat(64)}`,
+          validationRules: [{ includePaths: ["src/message.ts"], commandIndex: 0 }],
+        },
+      },
+    }),
+  );
+
+  const outcome = await runAction(
+    {
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: eventPath,
+      INPUT_STATE_DIRECTORY: stateDirectory,
+    },
+    {
+      readFile,
+      readDiff: async () => representativeDiff,
+      readPolicy: async () => patchPolicy,
+      setOutput: async () => undefined,
+      executeRole: async (request) =>
+        materialRoleResults(request, [
+          {
+            summary: "Public greeting is incorrect",
+            location: { path: "src/message.ts", line: 1 },
+            impact: "Callers receive the wrong value.",
+            evidence: ["hello owl"],
+            suggestedPatch: { startLine: 1, endLine: 1, replacement: "hello" },
+          },
+        ]),
+      verificationAdapter: {
+        readRepositoryFile: async () => ({ content: "hello owl\n", truncated: false }),
+        executeValidation: async () => ({
+          status: "passed",
+          exitCode: 0,
+          stdout: "passed",
+          stderr: "",
+          truncated: false,
+        }),
+        validateSuggestedPatch: async (request) => {
+          expect(request).toMatchObject({
+            headSha: reviewedPullRequest.headSha,
+            expected: "hello owl",
+            replacement: "hello",
+            command: { commandIndex: 0, argv: ["npm", "test"] },
+            security: { network: "denied", secrets: "denied" },
+          });
+          return {
+            status: "passed",
+            exitCode: 0,
+            stdout: "passed",
+            stderr: "",
+            truncated: false,
+          };
+        },
+      },
+      publishOutcome: async (_target, published, authorization) => {
+        await authorization.claimAuthority?.();
+        publishedFinding =
+          published.type === "findings" ? published.materialFindings[0] : undefined;
+        return {
+          result: "complete",
+          headSha: reviewedPullRequest.headSha,
+          inlineCommentCount: 1,
+          unanchoredFindingCount: 0,
+        };
+      },
+    },
+  );
+
+  expect(outcome.type).toBe("findings");
+  expect(publishedFinding).toMatchObject({
+    lifecycleState: "new",
+    suggestedPatch: {
+      path: "src/message.ts",
+      reviewedHeadSha: reviewedPullRequest.headSha,
+      replacement: "hello",
+      validation: { commandIndex: 0, status: "passed" },
+    },
+  });
+});
+
 // oxlint-disable-next-line max-lines-per-function
 it("refuses a stale run without overwriting the newest publication authority", async () => {
   const effects = new Map<string, unknown>();

@@ -138,7 +138,17 @@ Project policy is JSON:
     "maxFindings": 25
   },
   "verification": {
-    "validationCommands": [{ "argv": ["npm", "test"], "timeoutSeconds": 120 }]
+    "validationCommands": [
+      { "argv": ["npm", "test", "--", "src"], "timeoutSeconds": 120 },
+      { "argv": ["npm", "test"], "timeoutSeconds": 300 }
+    ],
+    "suggestedPatches": {
+      "sandboxImage": "node@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "validationRules": [
+        { "includePaths": ["src/**"], "commandIndex": 0 },
+        { "includePaths": ["**"], "commandIndex": 1 }
+      ]
+    }
   },
   "reviewRequests": {
     "cooldownSeconds": 300
@@ -163,7 +173,11 @@ Project policy is JSON:
 }
 ```
 
-Policy fields are closed: unsupported active fields fail configuration instead of being ignored. `reviewRequests.cooldownSeconds` is optional, defaults to 300 seconds, and cannot be lower than the non-overridable 60-second security minimum. Validation commands are trusted base-policy argv arrays, never shell strings. A policy may configure at most 10 commands, each with a timeout no greater than 600 seconds or the complete review timeout; captured stdout and stderr share a 64 KiB bound. On GitHub-hosted runners, the Action executes configured commands without a shell through a credential-free host adapter with abort support, relying on the ephemeral GitHub-hosted job as the isolation boundary. On self-hosted or unknown runners, built-in host execution is unavailable by default; embeddings must inject an isolated `verificationAdapter` to enable validation. The adapter itself does not enforce OS isolation. Local CLI execution remains explicitly user-authorized host execution. Process groups are terminated on timeout or abort where the platform supports them.
+Policy fields are closed: unsupported active fields fail configuration instead of being ignored. `reviewRequests.cooldownSeconds` is optional, defaults to 300 seconds, and cannot be lower than the non-overridable 60-second security minimum. Validation commands are trusted base-policy argv arrays, never shell strings. A policy may configure at most 10 commands, each with a timeout no greater than 600 seconds or the complete review timeout; captured stdout and stderr share a 64 KiB bound. On GitHub-hosted runners, the Action executes configured full-review commands without a shell through a credential-free host adapter, relying on the ephemeral GitHub-hosted job as that command's isolation boundary. On self-hosted or unknown runners, built-in host execution is unavailable by default. Local CLI execution remains explicitly user-authorized host execution. Process groups are terminated on timeout or abort where the platform supports them.
+
+Suggested patches require the optional `verification.suggestedPatches` policy. The image must be pinned by SHA-256 digest, already be present on the GitHub-hosted runner (`--pull never`), and provide `/usr/bin/env` plus the configured validation tools. Validation rules are ordered narrowest to broadest; the engine selects the first path match and references the configured command by zero-based index, so a model cannot choose its proof. Patch proof runs against a disposable exact-head worktree in a read-only Docker workspace with no network, an empty command environment, dropped capabilities, `no-new-privileges`, and fixed memory, CPU, process, temporary-storage, output, and timeout ceilings.
+
+A Suggested patch replaces one contiguous changed-line region of an existing text file. Both the source region and replacement are limited to 20 lines. Diffowl rejects file creation, deletion, rename, mode changes, workflows, permissions, credentials, dependency manifests, lockfiles, generated or vendored content, binaries, symlinks, submodules, and multi-file changes. If the target or proposal is stale, Docker or the pinned image is unavailable, the exact revision exceeds the isolation bound, no policy rule matches, or validation does not pass, the material Finding remains actionable without suggestion syntax. Self-hosted embeddings may provide a `verificationAdapter` with equivalent isolation guarantees.
 
 Every policy defines reviewer, challenger, and verifier profiles with a provider, model, and credential-profile name. The trusted Action or CLI adapter supplies those profiles as RunCell `Credentials`; repository policy and review-agent input contain no raw secrets.
 

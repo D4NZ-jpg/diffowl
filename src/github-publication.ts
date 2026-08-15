@@ -14,6 +14,7 @@ import {
   materialFindings,
 } from "./github-presentation.js";
 import { validatePublicationOutcome } from "./github-publication-validation.js";
+import { validSuggestedPatchForPublication } from "./suggested-patch.js";
 
 const API_VERSION = "2022-11-28";
 
@@ -104,16 +105,33 @@ function changedLineKeys(target: PublicationTarget): Set<string> {
   return new Set(target.changedLines.map(({ path, line }) => `${path}\0${line}`));
 }
 function inlineFinding(finding: MaterialFinding, lines: Set<string>): finding is InlineFinding {
+  const anchorLine = finding.suggestedPatch?.endLine ?? finding.location.line;
   return (
     finding.location.line !== undefined &&
-    lines.has(`${finding.location.path}\0${finding.location.line}`)
+    anchorLine !== undefined &&
+    lines.has(`${finding.location.path}\0${anchorLine}`)
   );
+}
+
+function publicationFinding(
+  finding: MaterialFinding,
+  target: PublicationTarget,
+  lines: Set<string>,
+): MaterialFinding {
+  const patch = validSuggestedPatchForPublication(finding, target.headSha, lines);
+  if (patch !== undefined) return finding;
+  const { suggestedPatch: _suggestedPatch, ...ordinaryFinding } = finding;
+  return ordinaryFinding;
 }
 function findingFingerprintFromBody(body: unknown): string | undefined {
   if (typeof body !== "string") return undefined;
   return /<!-- diffowl:finding:v1 fingerprint=(sha256:[\da-f]{64}) -->/iu
     .exec(body)?.[1]
     ?.toLowerCase();
+}
+
+function isFindingReplacementBody(body: unknown): boolean {
+  return typeof body === "string" && body.includes("<!-- diffowl:finding-replacement:v1 ");
 }
 
 async function existingFindingRoots(
@@ -135,7 +153,9 @@ async function existingFindingRoots(
       const author = asRecord(comment.user, "GitHub review comment author");
       if (author.type !== "Bot" || author.login !== "github-actions[bot]") continue;
       const fingerprint = findingFingerprintFromBody(comment.body);
-      if (fingerprint === undefined) continue;
+      if (fingerprint === undefined || isFindingReplacementBody(comment.body)) {
+        continue;
+      }
       roots.set(fingerprint, {
         fingerprint,
         rootCommentId: String(numericId(comment, "GitHub review comment response")),
@@ -153,6 +173,7 @@ function lifecycleUpdates(
   outcome: ReviewOutcome,
   roots: ReadonlyMap<string, ExistingFindingRoot>,
   target: PublicationTarget,
+  currentFindings: readonly MaterialFinding[],
 ): FindingDiscussionPublicationUpdate[] {
   if (outcome.run === undefined) return [];
   const transitions = new Map(
@@ -161,9 +182,7 @@ function lifecycleUpdates(
       transition,
     ]),
   );
-  const current = new Map(
-    materialFindings(outcome).map((finding) => [finding.fingerprint.value, finding]),
-  );
+  const current = new Map(currentFindings.map((finding) => [finding.fingerprint.value, finding]));
   const updates: FindingDiscussionPublicationUpdate[] = [];
   for (const [fingerprint, root] of roots) {
     const finding = current.get(fingerprint);
@@ -191,7 +210,11 @@ function lifecycleUpdates(
               fingerprint,
               headSha: target.headSha,
               path: finding.location.path,
-              line: finding.location.line,
+              line: finding.suggestedPatch?.endLine ?? finding.location.line,
+              ...(finding.suggestedPatch !== undefined &&
+              finding.suggestedPatch.startLine < finding.suggestedPatch.endLine
+                ? { startLine: finding.suggestedPatch.startLine }
+                : {}),
               body: findingBody(finding),
             },
           }
@@ -212,17 +235,33 @@ function reviewBody(unanchored: MaterialFinding[]): string {
   return lines.join("\n");
 }
 
+interface ReviewCommentPayload {
+  path: string;
+  line: number;
+  side: string;
+  body: string;
+  start_line?: number | undefined;
+  start_side?: string | undefined;
+}
+
 function reviewEffectId(
   target: PublicationTarget,
   body: string,
-  comments: ReadonlyArray<{ path: string; line: number; side: string; body: string }>,
+  comments: ReadonlyArray<ReviewCommentPayload>,
 ): string {
   return canonicalJsonHash({
     version: 1,
     surface: "pull_request_review",
     headSha: target.headSha,
     body,
-    comments: comments.map((comment) => ({ ...comment })),
+    comments: comments.map((comment) => ({
+      path: comment.path,
+      line: comment.line,
+      side: comment.side,
+      body: comment.body,
+      ...(comment.start_line === undefined ? {} : { start_line: comment.start_line }),
+      ...(comment.start_side === undefined ? {} : { start_side: comment.start_side }),
+    })),
   });
 }
 
@@ -276,12 +315,17 @@ async function publishReview(
 ): Promise<ReviewReceipt | undefined> {
   if (findings.length === 0 && unanchored.length === 0) return undefined;
   const visibleBody = reviewBody(unanchored);
-  const comments = findings.map((finding) => ({
-    path: finding.location.path,
-    line: finding.location.line,
-    side: "RIGHT",
-    body: findingBody(finding),
-  }));
+  const comments: ReviewCommentPayload[] = findings.map((finding) => {
+    const patch = finding.suggestedPatch;
+    const multiLine = patch !== undefined && patch.startLine < patch.endLine;
+    return {
+      path: finding.location.path,
+      line: patch?.endLine ?? finding.location.line,
+      side: "RIGHT",
+      body: findingBody(finding),
+      ...(multiLine ? { start_line: patch.startLine, start_side: "RIGHT" } : {}),
+    };
+  });
   const effectId = reviewEffectId(target, visibleBody, comments);
   const body = `${reviewEffectMarker(effectId)}\n${visibleBody}`;
   if (
@@ -382,8 +426,10 @@ export async function publishReviewOutcome(
   );
   await authorization?.claimAuthority?.();
   const roots = await existingFindingRoots(request, target);
-  const active = materialFindings(validated).filter(isActiveFinding);
   const lines = changedLineKeys(target);
+  const active = materialFindings(validated)
+    .filter(isActiveFinding)
+    .map((finding) => publicationFinding(finding, target, lines));
   const inline = active.filter(
     (finding): finding is InlineFinding =>
       inlineFinding(finding, lines) && !roots.has(finding.fingerprint.value),
@@ -391,7 +437,7 @@ export async function publishReviewOutcome(
   const unanchored = active.filter((finding) => !inlineFinding(finding, lines));
   await assertCurrentHead(request, target);
   const findingDiscussionEffects: FindingDiscussionPublicationReceipt[] = [];
-  for (const update of lifecycleUpdates(validated, roots, target)) {
+  for (const update of lifecycleUpdates(validated, roots, target, active)) {
     // Finding discussion projections are bounded to persisted Findings.
     // oxlint-disable-next-line no-await-in-loop
     const discussion = await publishFindingDiscussionUpdate(request, update);
