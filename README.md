@@ -110,6 +110,8 @@ jobs:
 
 To enable `/diffowl ...` review and finding commands, also install the trusted router workflow at [`examples/representative-repository/.github/workflows/review-request.yml`](examples/representative-repository/.github/workflows/review-request.yml). The router carries no provider secrets, checks out only the default branch, authenticates the actor, records a command event, and dispatches the canonical review workflow with verified inputs.
 
+Explicit self-hosted Action runs must set `self-hosted-state-directory` to a trusted, durable directory that survives separate workflow invocations. Do not place it under pull-request-controlled content or publish it as an artifact. GitHub-hosted runs ignore this input and store state in dedicated base-repository Git refs.
+
 ## Project policy
 
 Diffowl reads `.diffowl.json` from the pull request's **base commit**. Unsupported active fields fail closed instead of being ignored.
