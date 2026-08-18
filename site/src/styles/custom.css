@@ -243,8 +243,10 @@ h3 {
 .guide-entry {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(18rem, 0.75fr);
-  gap: clamp(2rem, 6vw, 6rem);
-  align-items: stretch;
+  gap: clamp(3rem, 7vw, 7rem);
+  align-items: start;
+  padding-block: clamp(3rem, 6vw, 5rem);
+  border-block: 1px solid var(--diffowl-border);
 }
 
 .guide-entry a {
@@ -254,25 +256,8 @@ h3 {
 
 .guide-primary {
   display: flex;
-  min-height: 24rem;
   flex-direction: column;
   align-items: flex-start;
-  padding: clamp(1.6rem, 4vw, 3rem);
-  border: 1px solid color-mix(in srgb, var(--diffowl-gold) 55%, var(--diffowl-border));
-  border-radius: var(--diffowl-radius);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--diffowl-gold) 16%, var(--diffowl-surface)),
-    var(--diffowl-surface)
-  );
-  transition:
-    transform 180ms ease,
-    border-color 180ms ease;
-}
-
-.guide-primary:hover {
-  border-color: var(--sl-color-accent);
-  transform: translateY(-3px);
 }
 
 .guide-title {
@@ -283,11 +268,11 @@ h3 {
 
 .guide-primary strong {
   max-width: 11ch;
-  margin-top: auto;
+  margin-top: 1.5rem;
   color: var(--sl-color-white);
-  font-size: clamp(2.25rem, 5vw, 4.4rem);
-  line-height: 0.98;
-  letter-spacing: -0.055em;
+  font-size: clamp(2.75rem, 5vw, 4.8rem);
+  line-height: 0.94;
+  letter-spacing: -0.06em;
 }
 
 .guide-primary p {
@@ -298,9 +283,16 @@ h3 {
 }
 
 .guide-action {
-  margin-top: 1.5rem;
+  margin-top: 1.75rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid currentColor;
   color: var(--sl-color-accent-high);
   font-weight: 700;
+  transition: color 160ms ease;
+}
+
+.guide-primary:hover .guide-action {
+  color: var(--sl-color-white);
 }
 
 .guide-links {
@@ -421,10 +413,6 @@ h3 {
 
   .guide-entry {
     grid-template-columns: 1fr;
-  }
-
-  .guide-primary {
-    min-height: 21rem;
   }
 
   .guide-links a {
