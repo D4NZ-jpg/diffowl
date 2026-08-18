@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./assets/diffowl-logo.svg" alt="Diffowl logo: an owl reviewing a Git branch" width="180" height="180">
+
 # Diffowl
 
 **Self-hostable, evidence-backed pull-request review for teams that still want humans making the call.**
@@ -57,20 +59,9 @@ name: Review OWL
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  workflow_dispatch:
-    inputs:
-      repository: { required: true, type: string }
-      pull-request-number: { required: true, type: string }
-      base-sha: { required: true, type: string }
-      head-sha: { required: true, type: string }
-      review-request-event-id: { required: true, type: string }
-      command-work-type: { required: false, type: string }
-      finding-fingerprint: { required: false, type: string }
-      finding-context: { required: false, type: string }
-      finding-root-comment-id: { required: false, type: string }
 
 concurrency:
-  group: review-owl-${{ inputs.pull-request-number || github.event.pull_request.number }}
+  group: review-owl-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -84,31 +75,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.head-sha || github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - id: review-owl
-        uses: D4NZ-jpg/diffowl@main
-        with:
-          repository: ${{ inputs.repository }}
-          pull-request-number: ${{ inputs.pull-request-number }}
-          base-sha: ${{ inputs.base-sha }}
-          head-sha: ${{ inputs.head-sha }}
-          review-request-event-id: ${{ inputs.review-request-event-id }}
-          command-work-type: ${{ inputs.command-work-type }}
-          finding-fingerprint: ${{ inputs.finding-fingerprint }}
-          finding-context: ${{ inputs.finding-context }}
-          finding-root-comment-id: ${{ inputs.finding-root-comment-id }}
+      - uses: D4NZ-jpg/diffowl@main
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-> [!TIP]
-> Copy the complete representative setup from [`examples/representative-repository`](examples/representative-repository). It includes the main review workflow, the trusted request router workflow, and a sample `.diffowl.json` policy.
+This workflow reviews pull requests when they are opened, updated, or reopened. Add the provider secrets required by your `.diffowl.json` role profiles.
 
-To enable `/diffowl ...` review and finding commands, also install the trusted router workflow at [`examples/representative-repository/.github/workflows/review-request.yml`](examples/representative-repository/.github/workflows/review-request.yml). The router carries no provider secrets, checks out only the default branch, authenticates the actor, records a command event, and dispatches the canonical review workflow with verified inputs.
+## Advanced: review and finding commands
+
+The complete setup in [`examples/representative-repository`](examples/representative-repository) adds manually dispatched reviews and `/diffowl ...` commands. It includes the canonical review workflow, the trusted request router, and a sample `.diffowl.json` policy.
+
+Use the full [`review-owl.yml`](examples/representative-repository/.github/workflows/review-owl.yml) when installing the [`review-request.yml`](examples/representative-repository/.github/workflows/review-request.yml) router. The router carries no provider secrets, checks out only the default branch, authenticates the actor, records a command event, and dispatches the canonical review workflow with verified inputs.
 
 Explicit self-hosted Action runs must set `self-hosted-state-directory` to a trusted, durable directory that survives separate workflow invocations. Do not place it under pull-request-controlled content or publish it as an artifact. GitHub-hosted runs ignore this input and store state in dedicated base-repository Git refs.
 
