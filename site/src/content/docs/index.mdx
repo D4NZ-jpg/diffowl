@@ -1,0 +1,67 @@
+---
+title: Diffowl
+description: Evidence-backed pull-request review for teams that keep humans in control.
+template: splash
+hero:
+  tagline: A self-hostable review engine that turns pull-request changes into typed, auditable outcomes—without pretending automation should make the merge decision.
+  image:
+    file: ../../assets/diffowl-logo.svg
+    alt: Diffowl, an owl reviewing a Git branch
+  actions:
+    - text: Review your first PR
+      link: ./getting-started/quick-start/
+      variant: primary
+    - text: Understand the trust model
+      link: ./security/trust-model/
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+<div class="trust-strip">
+  <div>
+    <strong>Evidence over confidence</strong>Material findings carry repository evidence and
+    explicit verification state.
+  </div>
+  <div>
+    <strong>Policy from the base</strong>A pull request cannot weaken the rules used to review
+    itself.
+  </div>
+  <div>
+    <strong>Humans keep authority</strong>Diffowl prepares targeted review; it does not make the
+    product decision.
+  </div>
+</div>
+
+## Review automation with a boundary
+
+Diffowl gives every eligible pull request a structured first pass. Reviewer, challenger, and verifier roles inspect the change, test the strength of candidate findings, and return one typed outcome. GitHub publication stays separate from review semantics, and unsafe or incomplete work never appears as clean.
+
+<CardGrid>
+  <Card title="Install it yourself" icon="puzzle">
+    Run Diffowl as a GitHub Action with your own provider credentials. No hosted Diffowl service is
+    required.
+  </Card>
+  <Card title="Know what ran" icon="shield-check">
+    Trust classification determines whether secrets, validation, publishing, and privileged tools
+    are permitted.
+  </Card>
+  <Card title="Keep findings coherent" icon="comment">
+    Stable finding identities and a durable ledger reconcile discussions across pushes and reruns.
+  </Card>
+  <Card title="Reproduce locally" icon="seti:terminal">
+    The CLI uses the same engine contract for debugging, inspection, and synthetic evaluation.
+  </Card>
+</CardGrid>
+
+:::caution[What “clean” means]
+A clean outcome means the completed permitted review found no material findings. It is not proof of correctness, an approval, or a merge decision.
+:::
+
+## Start with the workflow
+
+The fastest path is to add a base-branch policy, configure provider secrets, and install the pull-request workflow.
+
+1. [Complete the quick start](./getting-started/quick-start/).
+2. [Shape review behavior with project policy](./configuration/project-policy/).
+3. [Learn how trust changes capabilities](./security/trust-model/).

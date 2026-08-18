@@ -8,6 +8,8 @@ dist/*
 dist/action/*
 !dist/action/index.js
 coverage/
+.astro/
+site/dist/
 .env
 .env.*
 !.env.example

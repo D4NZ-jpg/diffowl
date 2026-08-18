@@ -25,3 +25,19 @@ jobs:
       - run: npm run check
       - name: Verify bundled Actions are current
         run: git diff --exit-code -- dist/action/index.js review-request/dist/index.js
+
+  documentation:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build

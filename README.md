@@ -9,6 +9,8 @@
 [![CI](https://github.com/D4NZ-jpg/diffowl/actions/workflows/ci.yml/badge.svg)](https://github.com/D4NZ-jpg/diffowl/actions/workflows/ci.yml)
 ![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933?logo=nodedotjs&logoColor=white)
 
+[Documentation](https://d4nz-jpg.github.io/diffowl/) · [Quick start](https://d4nz-jpg.github.io/diffowl/getting-started/quick-start/) · [GitHub](https://github.com/D4NZ-jpg/diffowl)
+
 </div>
 
 Diffowl runs an automated first pass over pull requests and turns the result into a typed, auditable review outcome. Its Review OWL engine separates material findings from advisory suggestions, records the evidence behind each finding, and keeps the final merge decision where it belongs: with a human reviewer.
