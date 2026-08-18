@@ -3,7 +3,7 @@ title: Local CLI
 description: Reproduce and inspect the Review OWL engine locally.
 ---
 
-The local CLI runs the same review engine contract used by the GitHub Action. Use it for reproduction, debugging, inspection, and evaluation—not as CI trust evidence.
+The local CLI runs the same review engine contract used by the GitHub Action. Use it for reproduction, debugging, inspection, and evaluation. Do not treat it as CI trust evidence.
 
 ## Requirements
 

@@ -3,65 +3,94 @@ title: Diffowl
 description: Evidence-backed pull-request review for teams that keep humans in control.
 template: splash
 hero:
-  tagline: A self-hostable review engine that turns pull-request changes into typed, auditable outcomes—without pretending automation should make the merge decision.
+  tagline: Evidence-backed pull-request review that prepares changes for focused human judgment.
   image:
     file: ../../assets/diffowl-logo.svg
-    alt: Diffowl, an owl reviewing a Git branch
+    alt: Diffowl owl reviewing a Git branch
   actions:
-    - text: Review your first PR
+    - text: Start reviewing
       link: ./getting-started/quick-start/
       variant: primary
-    - text: Understand the trust model
+    - text: Read the trust model
       link: ./security/trust-model/
       variant: minimal
 ---
 
-import { Card, CardGrid } from "@astrojs/starlight/components";
-
-<div class="trust-strip">
+<div class="principle-row" aria-label="Diffowl review principles">
   <div>
-    <strong>Evidence over confidence</strong>Material findings carry repository evidence and
-    explicit verification state.
+    <strong>Evidence first</strong>
+    <span>Findings carry repository evidence and explicit verification state.</span>
   </div>
   <div>
-    <strong>Policy from the base</strong>A pull request cannot weaken the rules used to review
-    itself.
+    <strong>Policy from the base</strong>
+    <span>Pull requests cannot weaken the rules used to review themselves.</span>
   </div>
   <div>
-    <strong>Humans keep authority</strong>Diffowl prepares targeted review; it does not make the
-    product decision.
+    <strong>Humans decide</strong>
+    <span>Diffowl prepares the review. Your team makes the product decision.</span>
   </div>
 </div>
 
-## Review automation with a boundary
+<section class="home-section review-system">
+  <div class="section-intro">
+    <h2>One review. Three safeguards.</h2>
+    <p>
+      Diffowl separates generation, challenge, and verification so confident language never counts
+      as proof by itself.
+    </p>
+  </div>
 
-Diffowl gives every eligible pull request a structured first pass. Reviewer, challenger, and verifier roles inspect the change, test the strength of candidate findings, and return one typed outcome. GitHub publication stays separate from review semantics, and unsafe or incomplete work never appears as clean.
+  <ol class="review-rail">
+    <li>
+      <strong>Classify</strong>
+      <span>Diffowl classifies trust before it starts risky work.</span>
+    </li>
+    <li>
+      <strong>Review</strong>
+      <span>The reviewer grounds each candidate in the change and repository.</span>
+    </li>
+    <li>
+      <strong>Challenge</strong>
+      <span>The challenger rejects weak evidence and low-materiality claims.</span>
+    </li>
+    <li>
+      <strong>Verify</strong>
+      <span>Supported findings become a typed, auditable outcome.</span>
+    </li>
+  </ol>
+</section>
 
-<CardGrid>
-  <Card title="Install it yourself" icon="puzzle">
-    Run Diffowl as a GitHub Action with your own provider credentials. No hosted Diffowl service is
-    required.
-  </Card>
-  <Card title="Know what ran" icon="shield-check">
-    Trust classification determines whether secrets, validation, publishing, and privileged tools
-    are permitted.
-  </Card>
-  <Card title="Keep findings coherent" icon="comment">
-    Stable finding identities and a durable ledger reconcile discussions across pushes and reruns.
-  </Card>
-  <Card title="Reproduce locally" icon="seti:terminal">
-    The CLI uses the same engine contract for debugging, inspection, and synthetic evaluation.
-  </Card>
-</CardGrid>
+<section class="home-section guide-entry">
+  <a class="guide-primary" href="./getting-started/quick-start/">
+    <span class="guide-title">Quick start</span>
+    <strong>Review your first pull request</strong>
+    <p>Add base-branch policy, connect provider credentials, and install the GitHub Action.</p>
+    <span class="guide-action">Open the guide</span>
+  </a>
 
-:::caution[What “clean” means]
-A clean outcome means the completed permitted review found no material findings. It is not proof of correctness, an approval, or a merge decision.
-:::
+  <div class="guide-links">
+    <a href="./configuration/project-policy/">
+      <strong>Project policy</strong>
+      <span>Control scope, limits, validation, and role profiles.</span>
+    </a>
+    <a href="./guides/finding-discussions/">
+      <strong>Finding discussions</strong>
+      <span>Accept, rebut, resolve, suppress, and reassess findings.</span>
+    </a>
+    <a href="./reference/outcomes/">
+      <strong>Review outcomes</strong>
+      <span>Interpret clean, partial, limited, failed, and abstained runs.</span>
+    </a>
+  </div>
+</section>
 
-## Start with the workflow
-
-The fastest path is to add a base-branch policy, configure provider secrets, and install the pull-request workflow.
-
-1. [Complete the quick start](./getting-started/quick-start/).
-2. [Shape review behavior with project policy](./configuration/project-policy/).
-3. [Learn how trust changes capabilities](./security/trust-model/).
+<section class="home-section human-handoff">
+  <p class="handoff-statement">Automation stops. Human judgment starts.</p>
+  <div>
+    <p>
+      A clean result means that the permitted review found no material findings. It does not prove
+      correctness or permit a merge without review.
+    </p>
+    <a href="./getting-started/introduction/">Understand the review boundary</a>
+  </div>
+</section>

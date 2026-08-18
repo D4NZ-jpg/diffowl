@@ -38,11 +38,11 @@ Completed outcomes use `coverage: "completed_permitted"`. Advisory suggestions r
 
 The GitHub workflow check is the readiness surface:
 
-- **success** — ready for targeted human review;
-- **failure with findings** — return to the author;
-- **failure without a defensible result** — inspect setup, limits, provider, or internal diagnostics;
-- **skipped** — deterministic project-policy exclusion;
-- **cancelled** — a newer revision superseded the run.
+- **success:** ready for targeted human review;
+- **failure with findings:** return to the author;
+- **failure without a defensible result:** inspect setup, limits, provider, or internal diagnostics;
+- **skipped:** deterministic project-policy exclusion;
+- **cancelled:** a newer revision superseded the run.
 
 :::caution
 A successful check does not mean “approved” or “correct.” It means Diffowl completed the work permitted by policy and trust, and the pull request is ready for human judgment.

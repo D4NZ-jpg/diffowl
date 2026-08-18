@@ -34,7 +34,7 @@ Diffowl does not provide:
 - first-class support for GitLab, Bitbucket, or Azure DevOps in V1.
 
 :::note[The human handoff]
-A successful Diffowl run means the pull request is ready for targeted human review—not that it is safe to merge without review.
+A successful Diffowl run means the pull request is ready for targeted human review. It does not mean the pull request is safe to merge without review.
 :::
 
 ## Choose a path
