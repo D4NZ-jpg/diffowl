@@ -1,0 +1,49 @@
+---
+import { Icon } from "@astrojs/starlight/components";
+---
+
+<script is:inline>
+  window.StarlightThemeProvider = (() => {
+    const storageKey = "starlight-theme";
+    const systemTheme = window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark";
+
+    let storedTheme;
+    try {
+      storedTheme = localStorage.getItem(storageKey);
+    } catch {
+      storedTheme = null;
+    }
+
+    const theme = storedTheme === "light" || storedTheme === "dark" ? storedTheme : systemTheme;
+
+    try {
+      localStorage.setItem(storageKey, theme);
+    } catch {
+      // The resolved theme still applies when storage is unavailable.
+    }
+
+    document.documentElement.dataset.theme = theme;
+
+    return {
+      updatePickers(selectedTheme = theme) {
+        document.querySelectorAll("starlight-theme-select").forEach((picker) => {
+          const select = picker.querySelector("select");
+          if (select) select.value = selectedTheme;
+          const template = document.querySelector("#theme-icons");
+          const newIcon = template?.content.querySelector(`.${selectedTheme}`);
+          if (newIcon) {
+            const oldIcon = picker.querySelector("svg.label-icon");
+            oldIcon?.replaceChildren(...newIcon.cloneNode(true).childNodes);
+          }
+        });
+      },
+    };
+  })();
+</script>
+
+<template id="theme-icons">
+  <Icon name="sun" class="light" />
+  <Icon name="moon" class="dark" />
+</template>

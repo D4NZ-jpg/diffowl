@@ -23,6 +23,10 @@ export default defineConfig({
         baseUrl: "https://github.com/D4NZ-jpg/diffowl/edit/main/site/",
       },
       customCss: ["./src/styles/custom.css"],
+      components: {
+        ThemeProvider: "./src/components/ThemeProvider.astro",
+        ThemeSelect: "./src/components/ThemeSelect.astro",
+      },
       sidebar: [
         {
           label: "Getting started",

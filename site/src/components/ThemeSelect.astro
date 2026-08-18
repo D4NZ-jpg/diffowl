@@ -1,0 +1,64 @@
+---
+import Select from "@astrojs/starlight/components/Select.astro";
+---
+
+<starlight-theme-select>
+  <Select
+    icon="moon"
+    label={Astro.locals.t("themeSelect.accessibleLabel")}
+    options={[
+      { label: Astro.locals.t("themeSelect.dark"), selected: false, value: "dark" },
+      { label: Astro.locals.t("themeSelect.light"), selected: false, value: "light" },
+    ]}
+    width="5.25em"
+  />
+</starlight-theme-select>
+
+<script is:inline>
+  StarlightThemeProvider.updatePickers();
+</script>
+
+<script>
+  type Theme = "dark" | "light";
+  declare const StarlightThemeProvider: {
+    updatePickers(theme?: Theme): void;
+  };
+
+  const storageKey = "starlight-theme";
+  const getSystemTheme = (): Theme =>
+    matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  const parseTheme = (theme: unknown): Theme =>
+    theme === "light" || theme === "dark" ? theme : getSystemTheme();
+
+  function loadTheme(): Theme {
+    try {
+      return parseTheme(localStorage.getItem(storageKey));
+    } catch {
+      return getSystemTheme();
+    }
+  }
+
+  function applyTheme(theme: Theme): void {
+    document.documentElement.dataset.theme = theme;
+    StarlightThemeProvider.updatePickers(theme);
+    try {
+      localStorage.setItem(storageKey, theme);
+    } catch {
+      // The selected theme still applies when storage is unavailable.
+    }
+  }
+
+  class DiffowlThemeSelect extends HTMLElement {
+    constructor() {
+      super();
+      applyTheme(loadTheme());
+      this.querySelector("select")?.addEventListener("change", (event) => {
+        if (event.currentTarget instanceof HTMLSelectElement) {
+          applyTheme(parseTheme(event.currentTarget.value));
+        }
+      });
+    }
+  }
+
+  customElements.define("starlight-theme-select", DiffowlThemeSelect);
+</script>

@@ -18,6 +18,7 @@
   --diffowl-navy: #091726;
   --diffowl-cream: #f5f0e7;
   --diffowl-gold: #b8975b;
+  --diffowl-brand-font: "Newsreader Variable", Georgia, serif;
 }
 
 :root[data-theme="light"] {
@@ -68,6 +69,13 @@ header.header {
   letter-spacing: -0.02em;
 }
 
+.site-title span {
+  font-family: var(--diffowl-brand-font);
+  font-size: 1.5rem;
+  font-weight: 620;
+  line-height: 1;
+}
+
 .site-title img {
   border-radius: 0.45rem;
 }
@@ -75,7 +83,7 @@ header.header {
 h1,
 h2,
 h3 {
-  font-family: "Newsreader Variable", Georgia, serif;
+  font-family: var(--diffowl-brand-font);
   font-weight: 620;
   letter-spacing: -0.025em;
 }
