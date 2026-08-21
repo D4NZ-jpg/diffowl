@@ -1,15 +1,15 @@
 ---
 title: Project policy
-description: Configure review scope, limits, validation, review requests, and role profiles.
+description: Field-by-field reference for .diffowl.json, including security ceilings and fail-closed behavior.
 ---
 
 Project policy lives at `.diffowl.json`. The GitHub Action reads it from the trusted base commit; the local CLI reads the path supplied by the user.
 
-Policy fields are closed. Unsupported active fields produce `configuration_failure` instead of being ignored.
+Policy fields are closed. Any unsupported field, at any nesting level, produces a `configuration_failure` outcome instead of being ignored. Invalid JSON and a missing file also fail closed.
 
 ## Complete shape
 
-```json
+```json title=".diffowl.json"
 {
   "version": 1,
   "scope": {
@@ -21,7 +21,11 @@ Policy fields are closed. Unsupported active fields produce `configuration_failu
     "maxFindings": 25
   },
   "verification": {
-    "validationCommands": [{ "argv": ["npm", "test"], "timeoutSeconds": 300 }]
+    "validationCommands": [{ "argv": ["npm", "test"], "timeoutSeconds": 300 }],
+    "suggestedPatches": {
+      "sandboxImage": "ghcr.io/example/validator@sha256:6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+      "validationRules": [{ "includePaths": ["src/**"], "commandIndex": 0 }]
+    }
   },
   "reviewRequests": {
     "cooldownSeconds": 300
@@ -46,55 +50,102 @@ Policy fields are closed. Unsupported active fields produce `configuration_failu
 }
 ```
 
-## Scope
+Required top-level fields: `version`, `scope`, `limits`, `verification`, `roleProfiles`. Optional: `reviewRequests`.
 
-`scope.includePaths` and `scope.excludePaths` use glob patterns. Exclusions remove matching paths from review after inclusion. Keep generated, bundled, vendored, and binary output out of the review surface unless it is itself the product.
+## `version`
 
-## Limits
+Must be the integer `1`. Any other value is a configuration failure.
 
-| Field                  | Purpose                                             | Security ceiling |
-| ---------------------- | --------------------------------------------------- | ---------------- |
-| `reviewTimeoutSeconds` | Hard limit for the complete provider-backed review. | 3,600 seconds    |
-| `maxFindings`          | Maximum material findings returned by one review.   | 100              |
+## `scope`
 
-Provider-reported budgets, resource limits, and the complete review timeout remain distinct typed outcomes.
+| Field          | Type       | Required | Meaning                                        |
+| -------------- | ---------- | -------- | ---------------------------------------------- |
+| `includePaths` | `string[]` | yes      | Glob patterns selecting paths to review.       |
+| `excludePaths` | `string[]` | yes      | Glob patterns removed after inclusion matches. |
 
-## Validation commands
+Both arrays must contain non-empty strings. Exclusions win over inclusions. Keep generated, bundled, vendored, and binary output out of the review surface unless it is itself the product.
 
-Commands are argv arrays, never shell strings:
+When no changed path survives scoping, the run returns a `policy_skip` outcome.
 
-```json
-{
-  "argv": ["npm", "test", "--", "src"],
-  "timeoutSeconds": 120
-}
+## `limits`
+
+| Field                  | Type             | Ceiling | Meaning                                             |
+| ---------------------- | ---------------- | ------- | --------------------------------------------------- |
+| `reviewTimeoutSeconds` | positive integer | 3,600   | Hard limit for the complete provider-backed review. |
+| `maxFindings`          | positive integer | 100     | Maximum material findings returned by one review.   |
+
+Values above a ceiling are a configuration failure, not a clamp. Exceeding `reviewTimeoutSeconds` at runtime produces a `timeout` outcome; provider budgets and resource exhaustion produce the distinct `budget_limit` and `resource_limit` outcomes.
+
+## `verification.validationCommands`
+
+An array of at most 10 commands. Each command:
+
+| Field            | Type                | Constraint                                                          |
+| ---------------- | ------------------- | ------------------------------------------------------------------- |
+| `argv`           | `string[]`          | Non-empty array of non-empty strings. Argv, never a shell string.   |
+| `timeoutSeconds` | positive integer    | At most 600, and at most `limits.reviewTimeoutSeconds`.             |
+
+Validation commands run only in contexts whose trust class permits them: sandboxed in trusted same-repo Action runs, user-authorized in local CLI runs, denied for fork and Dependabot pull requests. Command output is captured with a 64 KiB cap per attempt and recorded as verification evidence.
+
+## `verification.suggestedPatches` (optional)
+
+Enables isolated validation of suggested patches before they become GitHub suggestion blocks.
+
+| Field             | Type     | Constraint                                                             |
+| ----------------- | -------- | ---------------------------------------------------------------------- |
+| `sandboxImage`    | `string` | Must be a digest-pinned image reference (`name@sha256:<64 hex>`).      |
+| `validationRules` | array    | At most 10 rules.                                                      |
+
+Each rule:
+
+| Field          | Type       | Constraint                                                              |
+| -------------- | ---------- | ----------------------------------------------------------------------- |
+| `includePaths` | `string[]` | Non-empty strings; patch paths this rule applies to.                    |
+| `commandIndex` | integer    | Zero-based index into `verification.validationCommands`. Must exist.    |
+
+Tag-only image references are rejected. Pinning by digest keeps the validation environment reproducible and prevents tag-swap substitution.
+
+## `reviewRequests` (optional)
+
+| Field             | Type             | Default | Minimum | Meaning                                              |
+| ----------------- | ---------------- | ------- | ------- | ---------------------------------------------------- |
+| `cooldownSeconds` | positive integer | 300     | 60      | Minimum delay between accepted manual review requests. |
+
+Values below the 60-second security minimum are a configuration failure.
+
+## `roleProfiles`
+
+Exactly three roles are supported: `reviewer`, `challenger`, and `verifier`. Each profile requires:
+
+| Field               | Type   | Meaning                                                     |
+| ------------------- | ------ | ----------------------------------------------------------- |
+| `provider`          | string | Provider identifier passed to the RunCell execution layer.  |
+| `model`             | string | Model identifier for that provider.                         |
+| `credentialProfile` | string | Named credential profile resolved by the adapter at runtime. |
+
+The policy names credential profiles; it never contains raw secrets. See [Credentials and providers](../../guides/credentials/) for how profiles resolve in each adapter.
+
+## Security ceilings
+
+Ceilings are non-overridable. Policy that exceeds them fails closed.
+
+| Ceiling                        | Value       |
+| ------------------------------ | ----------- |
+| `reviewTimeoutSeconds`         | 3,600 s     |
+| `maxFindings`                  | 100         |
+| Validation command count       | 10          |
+| Validation command timeout     | 600 s       |
+| Validation output per attempt  | 64 KiB      |
+| Repository evidence per file   | 64 KiB      |
+
+## Failure behavior
+
+All policy problems produce a `configuration_failure` outcome carrying a specific reason string, for example:
+
+```text
+Project policy limits.reviewTimeoutSeconds exceeds the security ceiling of 3600.
+Project policy verification.validationCommands[1].timeoutSeconds exceeds limits.reviewTimeoutSeconds of 600.
+Project policy roleProfiles contains unsupported field "editor".
 ```
 
-A policy can configure at most 10 commands. Each timeout must be no greater than 600 seconds or the complete review timeout, whichever is lower. Captured stdout and stderr share a 64 KiB bound.
-
-GitHub-hosted trusted runs can execute configured commands in the externally isolated ephemeral job. Built-in host execution is unavailable by default on self-hosted or unknown runners. Local CLI execution is explicitly user-authorized and does not count as CI trust evidence.
-
-## Suggested patches
-
-`verification.suggestedPatches` is optional. It requires:
-
-- a digest-pinned container image already present on the runner;
-- ordered path rules mapped to configured validation commands;
-- one contiguous changed-line region in an existing text file;
-- a maximum of 20 source lines and 20 replacement lines.
-
-Diffowl rejects suggestions for workflows, credentials, permissions, dependency manifests, lockfiles, generated or vendored content, binaries, links, submodules, and multi-file changes.
-
-## Review requests
-
-`reviewRequests.cooldownSeconds` defaults to 300. The non-overridable security minimum is 60 seconds.
-
-## Role profiles
-
-Every policy defines `reviewer`, `challenger`, and `verifier` profiles. Each profile supplies:
-
-- `provider`
-- `model`
-- `credentialProfile`
-
-The trusted adapter resolves the profile to RunCell credentials. Raw keys never enter project policy or role-execution requests.
+Because the Action reads policy from the base commit, a pull request that edits `.diffowl.json` is still reviewed under the base branch's rules. The edited policy takes effect only after it merges.

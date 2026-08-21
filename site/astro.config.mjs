@@ -10,8 +10,18 @@ export default defineConfig({
       description: "Evidence-backed pull-request review for teams that keep humans in control.",
       favicon: "/favicon.svg",
       logo: {
-        src: "./src/assets/diffowl-logo.svg",
+        src: "./src/assets/diffowl-crest.svg",
       },
+      head: [
+        {
+          // Mockup-parity fonts. TODO: self-host Satoshi + JetBrains Mono.
+          tag: "link",
+          attrs: {
+            rel: "stylesheet",
+            href: "https://api.fontshare.com/v2/css?f[]=satoshi@500,700,900&f[]=jet-brains-mono@400,600&display=swap",
+          },
+        },
+      ],
       social: [
         {
           icon: "github",
@@ -45,6 +55,9 @@ export default defineConfig({
           items: [
             { label: "Finding discussions", slug: "guides/finding-discussions" },
             { label: "Local CLI", slug: "guides/local-cli" },
+            { label: "Durable state and self-hosting", slug: "guides/durable-state" },
+            { label: "Credentials and providers", slug: "guides/credentials" },
+            { label: "Debugging failed runs", slug: "guides/debugging-runs" },
           ],
         },
         {
@@ -55,9 +68,14 @@ export default defineConfig({
           label: "Reference",
           items: [
             { label: "Action inputs and outputs", slug: "reference/action" },
+            { label: "CLI reference", slug: "reference/cli" },
             { label: "Review outcomes", slug: "reference/outcomes" },
             { label: "Troubleshooting", slug: "reference/troubleshooting" },
           ],
+        },
+        {
+          label: "Integration",
+          items: [{ label: "Embedding the engine", slug: "integration/library" }],
         },
         {
           label: "Project",

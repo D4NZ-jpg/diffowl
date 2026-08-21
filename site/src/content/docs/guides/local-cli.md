@@ -45,7 +45,7 @@ Options:
   --publish                 Request publishing mode; local trust still denies GitHub publication.
 ```
 
-The report is JSON and includes the typed outcome, material findings, advisory suggestions, verification state, diagnostics, and optional persisted run and ledger data.
+The report is JSON and includes the typed outcome, material findings, advisory suggestions, verification state, diagnostics, and optional persisted run and ledger data. The [CLI reference](../../reference/cli/) documents every field, the input schema, and exit codes; [Debugging failed runs](../debugging-runs/) shows how to reproduce an Action run locally.
 
 ## Local persistence
 
