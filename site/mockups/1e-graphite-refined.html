@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup 1e: Graphite Refined</title>
+<!-- Mockup only: fonts via CDN. Production would self-host. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/fontsource/css/geist@latest/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/fontsource/css/geist-mono@latest/index.css">
+<style>
+  :root {
+    --bg: #101014;
+    --surface: #16161c;
+    --surface-2: #1c1c24;
+    --border: #26262f;
+    --border-strong: #34343f;
+    --text: #ededf0;
+    --muted: #9c9ca8;
+    --accent: #5b9dff;
+    --accent-ink: #0d1526;
+    --ok: #5fc78f;
+    --radius: 8px;
+    --mono: "Geist Mono", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  [id] { scroll-margin-top: 84px; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+  body { background: var(--bg); color: var(--text); font-family: "Geist", system-ui, sans-serif; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 32px; }
+
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(12px);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 28px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.02em; }
+  .brand img { width: 28px; height: 28px; }
+  .nav-links { display: flex; gap: 22px; font-size: 14px; color: var(--muted); }
+  .nav-links a:hover { color: var(--text); }
+  .nav-right { margin-left: auto; display: flex; align-items: center; gap: 18px; }
+  .nav-gh { display: inline-flex; align-items: center; opacity: 0.75; transition: opacity 120ms ease; }
+  .nav-gh img { width: 20px; height: 20px; display: block; }
+  .nav-gh:hover { opacity: 1; }
+  .nav-start { font-size: 13.5px; font-weight: 560; background: var(--accent); color: var(--accent-ink); border-radius: var(--radius); padding: 8px 16px; }
+  .nav-start:hover { background: #79b0ff; }
+
+  .hero {
+    padding: 84px 0 68px; border-bottom: 1px solid var(--border);
+    background-image: radial-gradient(color-mix(in srgb, var(--border) 80%, transparent) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 64px; align-items: center; }
+  h1 {
+    font-size: clamp(36px, 4.5vw, 52px);
+    font-weight: 640; letter-spacing: -0.035em; line-height: 1.05; text-wrap: balance;
+  }
+  h1 em { font-style: italic; color: var(--accent); padding-bottom: 4px; line-height: 1.1; }
+  .hero p { margin-top: 18px; max-width: 52ch; color: var(--muted); font-size: 16.5px; }
+  .cta-row { display: flex; gap: 12px; margin-top: 30px; }
+  .btn { display: inline-block; border-radius: var(--radius); font-size: 14.5px; font-weight: 560; padding: 10px 20px; transition: transform 120ms ease, background 120ms ease; }
+  .btn:active { transform: scale(0.98); }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); }
+  .btn-primary:hover { background: #79b0ff; }
+  .btn-ghost { border: 1px solid var(--border-strong); color: var(--text); }
+  .btn-ghost:hover { border-color: var(--muted); }
+
+  .install {
+    display: inline-flex; align-items: center; gap: 14px;
+    margin-top: 24px; padding: 8px 8px 8px 16px;
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+    font-family: var(--mono); font-size: 13px; color: var(--text);
+  }
+  .install button {
+    font: 560 12.5px/1 "Geist", sans-serif; cursor: pointer;
+    border: 0; border-radius: 5px; background: var(--surface-2); color: var(--muted); padding: 7px 13px;
+  }
+  .install button:hover { color: var(--text); background: var(--border); }
+  .oss-badge { display: flex; align-items: center; gap: 8px; margin-top: 20px; font-size: 13px; font-weight: 500; color: var(--muted); }
+  .oss-badge img { width: 15px; height: 15px; }
+  .oss-badge:hover { color: var(--text); }
+
+  .hero-visual { display: flex; justify-content: center; align-items: center; position: relative; }
+  .hero-visual::before {
+    content: ""; position: absolute; inset: 8% 4%;
+    background: radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 68%);
+    pointer-events: none;
+  }
+  .hero-visual img { width: min(320px, 100%); height: auto; position: relative; }
+
+  .works { padding: 22px 0; border-bottom: 1px solid var(--border); }
+  .works-inner { display: flex; align-items: center; justify-content: center; gap: 38px; flex-wrap: wrap; }
+  .works-inner span { font-size: 13px; font-weight: 500; color: var(--muted); }
+  .works-inner img { height: 24px; width: auto; display: block; opacity: 0.65; }
+
+  .principles { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .principles > div { padding: 26px 28px 26px 0; }
+  .principles > div + div { border-left: 1px solid var(--border); padding-left: 28px; }
+  .principles strong { display: block; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .principles span { display: block; margin-top: 6px; color: var(--muted); font-size: 14px; }
+
+  section { padding: 80px 0; }
+  h2 { font-size: clamp(24px, 3vw, 32px); font-weight: 620; letter-spacing: -0.025em; }
+  .section-sub { margin-top: 10px; color: var(--muted); max-width: 58ch; }
+
+  /* Product proof: a finding as Diffowl publishes it. */
+  .proof { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 64px; align-items: center; }
+  .finding { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+  .finding-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 11px 18px; border-bottom: 1px solid var(--border); background: var(--surface-2);
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+  }
+  .finding-head .state { color: var(--ok); font-weight: 600; }
+  .finding-body { padding: 18px 20px; }
+  .finding-body strong { display: block; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+  .finding-body p { margin-top: 8px; color: var(--muted); font-size: 14px; }
+  .finding-evidence {
+    margin-top: 16px; padding: 13px 15px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.7; overflow-x: auto; white-space: pre;
+  }
+  .finding-evidence .del { color: #e0776a; }
+  .finding-evidence .ctx { color: var(--muted); }
+  .finding-foot { display: flex; gap: 18px; padding: 11px 20px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+  .finding-foot b { color: var(--text); font-weight: 600; }
+  .finding-caption { margin-top: 12px; font-size: 13px; color: var(--muted); }
+
+  /* Pipeline as the branch: line through four nodes, ending filled. */
+  .flow { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-top: 60px; }
+  .flow::before {
+    content: ""; position: absolute; top: 8px; left: 9px; width: calc(75% + 9px);
+    height: 3px; background: var(--accent); border-radius: 2px;
+  }
+  .flow-step { position: relative; }
+  .flow-dot {
+    position: relative; z-index: 1; display: block; width: 19px; height: 19px;
+    border-radius: 50%; background: var(--bg); border: 3px solid var(--accent);
+  }
+  .flow-step:last-child .flow-dot { background: var(--accent); }
+  .flow-step strong { display: block; margin-top: 16px; font-family: var(--mono); font-size: 15px; font-weight: 600; }
+  .flow-step span { display: block; margin-top: 6px; color: var(--muted); font-size: 13.5px; max-width: 30ch; }
+
+  /* CLI parity. */
+  .cli { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 64px; align-items: center; }
+  .term {
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+    font-family: var(--mono); font-size: 13px; line-height: 1.8; padding: 18px 20px; overflow-x: auto; white-space: pre;
+  }
+  .term .prompt { color: var(--muted); }
+  .term .key { color: #9fb0f5; }
+  .term .str { color: #e8c26a; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+  .chips code { font-family: var(--mono); font-size: 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); padding: 5px 12px; color: var(--muted); }
+  .chips code.hot { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--accent); }
+
+  .docmap { margin-top: 36px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .docmap a {
+    display: grid; grid-template-columns: 220px 1fr auto; gap: 24px; align-items: baseline;
+    padding: 18px 24px; border-bottom: 1px solid var(--border);
+    background: var(--bg); transition: background 120ms ease;
+  }
+  .docmap a:last-child { border-bottom: 0; }
+  .docmap a:hover { background: var(--surface); }
+  .docmap strong { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+  .docmap span { color: var(--muted); font-size: 14px; }
+  .docmap .arrow { color: var(--accent); font-size: 14px; }
+
+  .closer { border-top: 1px solid var(--border); text-align: center; }
+  .closer .branch { width: min(320px, 66%); height: auto; margin: 0 auto 32px; display: block; }
+  .closer h2 { max-width: 18ch; margin: 0 auto; }
+  .closer p { max-width: 52ch; margin: 14px auto 0; color: var(--muted); }
+  .closer a { display: inline-block; margin-top: 18px; color: var(--accent); font-weight: 560; }
+
+  footer { border-top: 1px solid var(--border); padding: 44px 0 32px; font-size: 13.5px; color: var(--muted); }
+  .foot-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)); gap: 40px; }
+  .foot-brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; color: var(--text); }
+  .foot-brand img { width: 24px; height: 24px; }
+  .foot-grid h3 { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .foot-grid ul { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+  .foot-grid a:hover { color: var(--accent); }
+  .foot-note { margin-top: 36px; padding-top: 18px; border-top: 1px solid var(--border); font-size: 13px; }
+
+  @media (max-width: 880px) {
+    .hero-grid, .proof, .cli { grid-template-columns: 1fr; gap: 40px; }
+    .hero-visual { display: none; }
+    .principles, .foot-grid { grid-template-columns: 1fr; }
+    .principles > div + div { border-left: 0; border-top: 1px solid var(--border); padding-left: 0; }
+    .flow { grid-template-columns: 1fr; gap: 30px; }
+    .flow::before { top: 9px; left: 8px; width: 3px; height: calc(100% - 40px); }
+    .nav-start { display: none; }
+    .docmap a { grid-template-columns: 1fr; gap: 4px; }
+    .install { flex-direction: column; align-items: stretch; gap: 10px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .btn, .docmap a, .nav-gh { transition: none; } }
+</style>
+</head>
+<body>
+
+<nav><div class="wrap nav-inner">
+  <a class="brand" href="#"><img src="logo-graphite.svg" alt="Diffowl"> Diffowl</a>
+  <div class="nav-links"><a href="#">Docs</a><a href="#">Reference</a><a href="#">Security</a></div>
+  <div class="nav-right">
+    <a class="nav-gh" href="https://github.com/D4NZ-jpg/diffowl" aria-label="Diffowl on GitHub"><img src="https://cdn.simpleicons.org/github/ededf0" alt="GitHub"></a>
+    <a class="nav-start" href="#">Start reviewing</a>
+  </div>
+</div></nav>
+
+<header class="hero"><div class="wrap hero-grid">
+  <div>
+    <h1>Pull-request review that shows its <em>evidence</em>.</h1>
+    <p>Diffowl runs a typed, auditable first pass over every eligible pull request and hands the decision back to your team.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#">Start reviewing</a>
+      <a class="btn btn-ghost" href="https://d4nz-jpg.github.io/diffowl/getting-started/introduction/">How it works</a>
+    </div>
+    <code class="install"><span>uses: D4NZ-jpg/diffowl@main</span><button type="button" data-copy>Copy</button></code>
+    <a class="oss-badge" href="https://github.com/D4NZ-jpg/diffowl"><img src="https://cdn.simpleicons.org/github/9c9ca8" alt="">Open source on GitHub</a>
+  </div>
+  <div class="hero-visual"><img src="logo-graphite.svg" alt="Diffowl owl reviewing a Git branch"></div>
+</div></header>
+
+<div class="works"><div class="wrap works-inner">
+  <span>Runs on GitHub Actions with your own provider keys</span>
+  <img src="https://cdn.simpleicons.org/githubactions/9c9ca8" alt="GitHub Actions">
+  <img src="https://cdn.simpleicons.org/openai/9c9ca8" alt="OpenAI">
+  <img src="https://cdn.simpleicons.org/anthropic/9c9ca8" alt="Anthropic">
+  <img src="https://cdn.simpleicons.org/nodedotjs/9c9ca8" alt="Node.js">
+</div></div>
+
+<section><div class="wrap principles">
+  <div><strong>Evidence first</strong><span>Findings carry repository evidence and explicit verification state.</span></div>
+  <div><strong>Policy from the base</strong><span>Pull requests cannot weaken the rules used to review themselves.</span></div>
+  <div><strong>Humans decide</strong><span>Diffowl prepares the review. Your team makes the product decision.</span></div>
+</div></section>
+
+<section style="padding-top: 0;"><div class="wrap proof">
+  <div>
+    <h2>Every finding shows its work.</h2>
+    <p class="section-sub">A material finding is a claim with a location, an impact, repository evidence, and an explicit verification state. No evidence, no finding.</p>
+  </div>
+  <div>
+    <div class="finding">
+      <div class="finding-head">
+        <span>src/webhook-queue.ts:118</span>
+        <span class="state">verified</span>
+      </div>
+      <div class="finding-body">
+        <strong>Deleting the retry guard drops queued webhooks on transient failures.</strong>
+        <p>Transient provider errors now permanently discard events instead of requeueing them.</p>
+        <div class="finding-evidence"><span class="del">- if (err.retriable && attempt < MAX_RETRIES) {</span>
+<span class="del">-   return this.requeue(event, attempt + 1);</span>
+<span class="del">- }</span>
+<span class="ctx">  this.deadLetter.push(event);</span></div>
+      </div>
+      <div class="finding-foot">
+        <span>Evidence: <b>scoped diff</b></span>
+        <span>Validation: <b>npm test failed on head</b></span>
+      </div>
+    </div>
+    <p class="finding-caption">Example finding, shown as Diffowl publishes it to a review thread.</p>
+  </div>
+</div></section>
+
+<section style="padding-top: 0;"><div class="wrap">
+  <h2 id="how-it-works">One review. Three safeguards.</h2>
+  <p class="section-sub">Generation, challenge, and verification are separate roles, so confident language never counts as proof by itself.</p>
+  <div class="flow">
+    <div class="flow-step"><i class="flow-dot"></i><strong>classify</strong><span>Diffowl classifies trust before it starts risky work.</span></div>
+    <div class="flow-step"><i class="flow-dot"></i><strong>review</strong><span>The reviewer grounds each candidate in the change and repository.</span></div>
+    <div class="flow-step"><i class="flow-dot"></i><strong>challenge</strong><span>The challenger rejects weak evidence and low-materiality claims.</span></div>
+    <div class="flow-step"><i class="flow-dot"></i><strong>verify</strong><span>Supported findings become a typed, auditable outcome.</span></div>
+  </div>
+</div></section>
+
+<section style="padding-top: 0;"><div class="wrap cli">
+  <div class="term"><span class="prompt">$</span> diffowl review --input pr.json --policy .diffowl.json
+{
+  <span class="key">"type"</span>: <span class="str">"findings"</span>,
+  <span class="key">"coverage"</span>: <span class="str">"completed_permitted"</span>,
+  <span class="key">"materialFindings"</span>: [ 1 finding ],
+  <span class="key">"verification"</span>: { <span class="key">"validationAttempts"</span>: 1 }
+}</div>
+  <div>
+    <h2>The same review, on your machine.</h2>
+    <p class="section-sub">The CLI runs the engine the Action runs. Reproduce a CI review locally, inspect the full report, and get the same typed outcome.</p>
+    <div class="chips">
+      <code class="hot">clean</code><code class="hot">findings</code><code>partial_coverage</code><code>timeout</code><code>abstention</code><code>configuration_failure</code>
+    </div>
+  </div>
+</div></section>
+
+<section style="padding-top: 0;"><div class="wrap">
+  <h2>Documentation</h2>
+  <div class="docmap">
+    <a href="#"><strong>Quick start</strong><span>Policy, credentials, and the Action in one sitting.</span><span class="arrow">&rarr;</span></a>
+    <a href="#"><strong>Project policy</strong><span>Every field of .diffowl.json, with its security ceilings.</span><span class="arrow">&rarr;</span></a>
+    <a href="#"><strong>CLI reference</strong><span>Options, input schema, report shape, and exit codes.</span><span class="arrow">&rarr;</span></a>
+    <a href="#"><strong>Review outcomes</strong><span>The typed outcome union and the material finding shape.</span><span class="arrow">&rarr;</span></a>
+    <a href="#"><strong>Durable state</strong><span>Git-ref state, self-hosted directories, and the request router.</span><span class="arrow">&rarr;</span></a>
+    <a href="#"><strong>Embedding</strong><span>Call runReview from your own CI or tooling.</span><span class="arrow">&rarr;</span></a>
+  </div>
+</div></section>
+
+<section class="closer"><div class="wrap">
+  <img class="branch" src="branch-graphite.svg" alt="">
+  <h2>Automation stops. Human judgment starts.</h2>
+  <p>A clean result means Diffowl found no material problems in what it was allowed to check. It is not proof the change is correct, and it is not an approval.</p>
+  <a href="#">What Diffowl does and does not do &rarr;</a>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="foot-grid">
+    <div>
+      <div class="foot-brand"><img src="logo-graphite.svg" alt=""> Diffowl</div>
+      <p style="margin-top: 12px; max-width: 30ch;">Self-hostable, evidence-backed pull-request review.</p>
+    </div>
+    <div>
+      <h3>Product</h3>
+      <ul><li><a href="#how-it-works">How it works</a></li><li><a href="#">Trust model</a></li><li><a href="#">Review outcomes</a></li></ul>
+    </div>
+    <div>
+      <h3>Docs</h3>
+      <ul><li><a href="#">Quick start</a></li><li><a href="#">Project policy</a></li><li><a href="#">CLI reference</a></li></ul>
+    </div>
+    <div>
+      <h3>Project</h3>
+      <ul><li><a href="https://github.com/D4NZ-jpg/diffowl">GitHub</a></li><li><a href="#">Specification</a></li><li><a href="#">Issues</a></li></ul>
+    </div>
+  </div>
+  <div class="foot-note">Diffowl prepares the review. Your team makes the call.</div>
+</div></footer>
+
+<script>
+  document.querySelector("[data-copy]").addEventListener("click", async (e) => {
+    await navigator.clipboard.writeText("uses: D4NZ-jpg/diffowl@main");
+    e.target.textContent = "Copied";
+    setTimeout(() => (e.target.textContent = "Copy"), 1600);
+  });
+</script>
+<script src="switcher.js"></script>
+</body>
+</html>

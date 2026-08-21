@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup 2c: Ink</title>
+<!-- Mockup only: fonts via CDN. Production would self-host. -->
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@500,700,900&display=swap">
+<style>
+  :root {
+    --bg: #f7f5f0;
+    --ink: #191c1f;
+    --muted: #565d63;
+    --line: #dcd8ce;
+    --pop: #2340d8; /* single saturated pop, used only where the commit node lands */
+  }
+  * { box-sizing: border-box; margin: 0; }
+  [id] { scroll-margin-top: 88px; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+
+  body { background: var(--bg); color: var(--ink); font-family: "Satoshi", system-ui, sans-serif; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 36px; }
+
+  nav { border-bottom: 1px solid var(--ink); background: var(--bg); position: sticky; top: 0; z-index: 10; }
+  .nav-inner { display: flex; align-items: center; height: 60px; gap: 32px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 900; font-size: 17px; letter-spacing: -0.02em; }
+  .brand img { width: 27px; height: 27px; }
+  .nav-links { display: flex; gap: 26px; font-size: 14.5px; font-weight: 500; }
+  .nav-links a:hover { text-decoration: underline; text-underline-offset: 4px; }
+  .nav-cta { margin-left: auto; display: inline-flex; align-items: center; opacity: 0.85; transition: opacity 120ms ease; }
+  .nav-cta img { width: 21px; height: 21px; display: block; }
+  .nav-cta:hover { opacity: 1; }
+
+  /* Swiss hero: oversized left-aligned type against a hard grid. */
+  .hero { border-bottom: 1px solid var(--ink); }
+  .hero-grid { display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); }
+  .hero-copy { padding: 84px 48px 72px 0; }
+  .hero h1 { font-size: clamp(48px, 7vw, 92px); font-weight: 900; letter-spacing: -0.045em; line-height: 0.96; text-wrap: balance; }
+  .oss-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--ink); padding: 7px 16px; margin-bottom: 30px;
+    font-size: 13.5px; font-weight: 700;
+  }
+  .oss-badge img { width: 16px; height: 16px; }
+  .oss-badge:hover { background: var(--ink); color: var(--bg); }
+  .oss-badge:hover img { filter: invert(1); }
+  .hero p { max-width: 42ch; margin-top: 26px; color: var(--muted); font-size: 18px; }
+  .cta-row { display: flex; gap: 14px; margin-top: 36px; }
+  .btn { font-size: 15px; font-weight: 700; padding: 13px 26px; transition: transform 120ms ease; }
+  .btn:active { transform: scale(0.98); }
+  .btn-primary { background: var(--ink); color: var(--bg); }
+  .btn-primary:hover { background: #000; }
+  .btn-ghost { border: 1px solid var(--ink); }
+  .btn-ghost:hover { background: var(--ink); color: var(--bg); }
+  .hero-owl { border-left: 1px solid var(--ink); display: flex; align-items: flex-end; justify-content: center; padding: 40px 24px 0; }
+  .hero-owl img { width: min(260px, 100%); display: block; }
+
+  .principles { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--ink); }
+  .principles > div { padding: 30px 32px 28px 0; }
+  .principles > div + div { border-left: 1px solid var(--ink); padding-left: 32px; }
+  .principles strong { display: block; font-weight: 900; font-size: 15.5px; letter-spacing: -0.01em; }
+  .principles span { display: block; margin-top: 6px; color: var(--muted); font-size: 14.5px; }
+
+  section { padding: 92px 0; }
+  h2 { font-size: clamp(30px, 4vw, 46px); font-weight: 900; letter-spacing: -0.035em; line-height: 1.02; }
+  .section-sub { margin-top: 12px; color: var(--muted); max-width: 54ch; font-size: 16.5px; }
+
+  /* Pipeline as oversized index rows. */
+  .pipeline { margin-top: 48px; border-top: 1px solid var(--ink); }
+  .pipeline > div { display: grid; grid-template-columns: minmax(200px, 4fr) 8fr; gap: 32px; padding: 30px 0; border-bottom: 1px solid var(--ink); align-items: baseline; }
+  .pipeline strong { font-size: clamp(26px, 3vw, 38px); font-weight: 900; letter-spacing: -0.03em; }
+  .pipeline span { color: var(--muted); font-size: 16px; max-width: 58ch; }
+
+  /* Doc map: two-column ruled index. */
+  .docmap { display: grid; grid-template-columns: 1fr 1fr; gap: 0 64px; margin-top: 48px; border-top: 1px solid var(--ink); }
+  .docmap a { display: block; padding: 22px 0; border-bottom: 1px solid var(--line); transition: padding-left 140ms ease; }
+  .docmap a:hover { padding-left: 12px; }
+  .docmap a:hover strong { text-decoration: underline; text-underline-offset: 6px; text-decoration-thickness: 2px; }
+  .docmap strong { display: block; font-size: 19px; font-weight: 900; letter-spacing: -0.02em; }
+  .docmap span { display: block; margin-top: 4px; color: var(--muted); font-size: 14.5px; }
+
+  .closer { border-top: 1px solid var(--ink); }
+  .closer-grid { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 56px; align-items: center; }
+  .closer p { margin-top: 14px; color: var(--muted); max-width: 48ch; font-size: 16.5px; }
+  .closer a.link { display: inline-block; margin-top: 20px; font-weight: 700; border-bottom: 2px solid var(--ink); padding-bottom: 2px; }
+  .closer img { width: 100%; max-width: 420px; justify-self: center; }
+
+  footer { border-top: 1px solid var(--ink); padding: 30px 0; font-size: 14px; color: var(--muted); }
+
+  @media (max-width: 880px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .hero-owl { border-left: 0; border-top: 1px solid var(--ink); padding: 24px; }
+    .hero-copy { padding: 56px 0 48px; }
+    .principles { grid-template-columns: 1fr; }
+    .principles > div + div { border-left: 0; border-top: 1px solid var(--ink); padding-left: 0; }
+    .pipeline > div { grid-template-columns: 1fr; gap: 6px; }
+    .docmap, .closer-grid { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { .btn, .docmap a { transition: none; } }
+</style>
+</head>
+<body>
+
+<nav><div class="wrap nav-inner">
+  <a class="brand" href="#"><img src="logo-ink.svg" alt=""> Diffowl</a>
+  <div class="nav-links"><a href="#">Docs</a><a href="#">Reference</a><a href="#">Security</a></div>
+  <a class="nav-cta" href="https://github.com/D4NZ-jpg/diffowl" aria-label="Diffowl on GitHub"><img src="https://cdn.simpleicons.org/github/191c1f" alt="GitHub"></a>
+</div></nav>
+
+<header class="hero"><div class="wrap hero-grid">
+  <div class="hero-copy">
+    <a class="oss-badge" href="https://github.com/D4NZ-jpg/diffowl"><img src="https://cdn.simpleicons.org/github/191c1f" alt="">Open source on GitHub</a>
+    <h1>Review the change. Keep the judgment.</h1>
+    <p>Diffowl gives every eligible pull request an evidence-backed first pass your team can inspect, run, and control.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#">Start reviewing</a>
+      <a class="btn btn-ghost" href="https://d4nz-jpg.github.io/diffowl/getting-started/introduction/">How it works</a>
+    </div>
+  </div>
+  <div class="hero-owl"><img src="logo-ink.svg" alt="Diffowl owl reviewing a Git branch"></div>
+</div></header>
+
+<div class="wrap principles">
+  <div><strong>Evidence first</strong><span>Findings carry repository evidence and explicit verification state.</span></div>
+  <div><strong>Policy from the base</strong><span>Pull requests cannot weaken the rules used to review themselves.</span></div>
+  <div><strong>Humans decide</strong><span>Diffowl prepares the review. Your team makes the product decision.</span></div>
+</div>
+
+<section><div class="wrap">
+  <h2 id="how-it-works">One review. Three safeguards.</h2>
+  <p class="section-sub">Generation, challenge, and verification are separate roles, so confident language never counts as proof by itself.</p>
+  <div class="pipeline">
+    <div><strong>Classify</strong><span>Diffowl classifies trust before it starts risky work.</span></div>
+    <div><strong>Review</strong><span>The reviewer grounds each candidate in the change and repository.</span></div>
+    <div><strong>Challenge</strong><span>The challenger rejects weak evidence and low-materiality claims.</span></div>
+    <div><strong>Verify</strong><span>Supported findings become a typed, auditable outcome.</span></div>
+  </div>
+</div></section>
+
+<section style="padding-top: 0;"><div class="wrap">
+  <h2>Documentation</h2>
+  <div class="docmap">
+    <a href="#"><strong>Quick start</strong><span>Policy, credentials, and the Action in one sitting.</span></a>
+    <a href="#"><strong>Project policy</strong><span>Every field of .diffowl.json, with its security ceilings.</span></a>
+    <a href="#"><strong>CLI reference</strong><span>Options, input schema, report shape, and exit codes.</span></a>
+    <a href="#"><strong>Review outcomes</strong><span>The typed outcome union and the material finding shape.</span></a>
+    <a href="#"><strong>Durable state</strong><span>Git-ref state, self-hosted directories, and the request router.</span></a>
+    <a href="#"><strong>Embedding</strong><span>Call runReview from your own CI or tooling.</span></a>
+  </div>
+</div></section>
+
+<section class="closer"><div class="wrap closer-grid">
+  <div>
+    <h2>Automation stops. Human judgment starts.</h2>
+    <p>A clean result means Diffowl found no material problems in what it was allowed to check. It is not proof the change is correct, and it is not an approval.</p>
+    <a class="link" href="#">What Diffowl does and does not do</a>
+  </div>
+  <img src="branch-ink.svg" alt="">
+</div></section>
+
+<footer><div class="wrap">Diffowl. Self-hostable pull-request review.</div></footer>
+
+<script src="switcher.js"></script>
+</body>
+</html>
