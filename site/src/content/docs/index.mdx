@@ -3,18 +3,49 @@ title: Diffowl
 description: Evidence-backed pull-request review for teams that keep humans in control.
 template: splash
 hero:
-  tagline: Evidence-backed pull-request review that prepares changes for focused human judgment.
+  title: Review the change. <mark>Keep the judgment.</mark>
+  tagline: Diffowl gives every eligible pull request an evidence-backed first pass your team can inspect, run, and control.
   image:
-    file: ../../assets/diffowl-logo.svg
-    alt: Diffowl owl reviewing a Git branch
+    light: ../../assets/diffowl-crest.svg
+    dark: ../../assets/diffowl-crest-dark.svg
+    alt: Diffowl owl perched on a Git branch
   actions:
     - text: Start reviewing
       link: ./getting-started/quick-start/
       variant: primary
-    - text: Read the trust model
-      link: ./security/trust-model/
+    - text: How it works
+      link: ./getting-started/introduction/
       variant: minimal
 ---
+
+import branchLight from "../../assets/branch-light.svg";
+import branchDark from "../../assets/branch-dark.svg";
+import openaiMark from "../../assets/openai-mark.svg";
+
+<div class="hero-ext">
+  <div class="hero-install">
+
+```yaml
+uses: D4NZ-jpg/diffowl@main
+```
+
+  </div>
+  <div style="text-align: center;">
+    <a class="oss-badge" href="https://github.com/D4NZ-jpg/diffowl">
+      <img src="https://cdn.simpleicons.org/github/8b8f93" alt="" /> Open source on GitHub
+    </a>
+  </div>
+</div>
+
+<div class="works" aria-label="Platforms and providers">
+  <span>Runs on GitHub Actions with your own provider keys</span>
+  <div class="works-logos">
+    <img src="https://cdn.simpleicons.org/githubactions/8b8f93" alt="GitHub Actions" />
+    <img src={openaiMark.src} alt="OpenAI" />
+    <img src="https://cdn.simpleicons.org/anthropic/8b8f93" alt="Anthropic" />
+    <img src="https://cdn.simpleicons.org/nodedotjs/8b8f93" alt="Node.js" />
+  </div>
+</div>
 
 <div class="principle-row" aria-label="Diffowl review principles">
   <div>
@@ -31,66 +62,142 @@ hero:
   </div>
 </div>
 
-<section class="home-section review-system">
+<section class="home-section proof">
+  <div class="section-intro">
+    <h2>Every finding shows its work.</h2>
+    <p>
+      A material finding is a claim with a location, an impact, repository evidence, and an
+      explicit verification state. No evidence, no finding.
+    </p>
+  </div>
+  <div>
+    <div class="finding">
+      <div class="finding-head">
+        <span>src/webhook-queue.ts:118</span>
+        <span class="state">verified</span>
+      </div>
+      <div class="finding-body">
+        <strong>Deleting the retry guard drops queued webhooks on transient failures.</strong>
+        <p>Transient provider errors now permanently discard events instead of requeueing them.</p>
+        <div class="finding-evidence">
+          <div class="del">{"- if (err.retriable && attempt < MAX_RETRIES) {"}</div>
+          <div class="del">{"-   return this.requeue(event, attempt + 1);"}</div>
+          <div class="del">{"- }"}</div>
+          <div class="ctx">{"  this.deadLetter.push(event);"}</div>
+        </div>
+      </div>
+      <div class="finding-foot">
+        <span>Evidence: <b>scoped diff</b></span>
+        <span>Validation: <b>npm test failed on head</b></span>
+      </div>
+    </div>
+    <p class="finding-caption">Example finding, shown as Diffowl publishes it to a review thread.</p>
+  </div>
+</section>
+
+<section class="home-section" id="how-it-works">
   <div class="section-intro">
     <h2>One review. Three safeguards.</h2>
     <p>
-      Diffowl separates generation, challenge, and verification so confident language never counts
-      as proof by itself.
+      Generation, challenge, and verification are separate roles, so confident language never
+      counts as proof by itself.
     </p>
   </div>
-
-  <ol class="review-rail">
-    <li>
+  <div class="flow">
+    <div class="flow-step">
+      <i class="flow-dot"></i>
       <strong>Classify</strong>
       <span>Diffowl classifies trust before it starts risky work.</span>
-    </li>
-    <li>
+    </div>
+    <div class="flow-step">
+      <i class="flow-dot"></i>
       <strong>Review</strong>
       <span>The reviewer grounds each candidate in the change and repository.</span>
-    </li>
-    <li>
+    </div>
+    <div class="flow-step">
+      <i class="flow-dot"></i>
       <strong>Challenge</strong>
       <span>The challenger rejects weak evidence and low-materiality claims.</span>
-    </li>
-    <li>
+    </div>
+    <div class="flow-step">
+      <i class="flow-dot"></i>
       <strong>Verify</strong>
       <span>Supported findings become a typed, auditable outcome.</span>
-    </li>
-  </ol>
+    </div>
+  </div>
 </section>
 
-<section class="home-section guide-entry">
-  <a class="guide-primary" href="./getting-started/quick-start/">
-    <span class="guide-title">Quick start</span>
-    <strong>Review your first pull request</strong>
-    <p>Add base-branch policy, connect provider credentials, and install the GitHub Action.</p>
-    <span class="guide-action">Open the guide</span>
-  </a>
+<section class="home-section cli">
+  <div>
 
-  <div class="guide-links">
+```json title="diffowl review"
+{
+  "type": "findings",
+  "coverage": "completed_permitted",
+  "materialFindings": ["1 finding"],
+  "verification": { "validationAttempts": 1 }
+}
+```
+
+  </div>
+  <div>
+    <div class="section-intro">
+      <h2>The same review, on your machine.</h2>
+      <p>
+        The <a href="./reference/cli/">CLI</a> runs the engine the Action runs. Reproduce a CI
+        review locally, inspect the full report, and get the same typed outcome.
+      </p>
+    </div>
+    <div class="chips">
+      <code class="hot">clean</code>
+      <code class="hot">findings</code>
+      <code>partial_coverage</code>
+      <code>timeout</code>
+      <code>abstention</code>
+      <code>configuration_failure</code>
+    </div>
+  </div>
+</section>
+
+<section class="home-section">
+  <div class="section-intro">
+    <h2>Documentation</h2>
+  </div>
+  <div class="docmap">
+    <a class="lead" href="./getting-started/quick-start/">
+      <strong>Quick start</strong>
+      <span>
+        Add base-branch policy, connect provider credentials, and install the GitHub Action in one
+        sitting.
+      </span>
+      <span class="go">Open the guide &rarr;</span>
+    </a>
     <a href="./configuration/project-policy/">
       <strong>Project policy</strong>
-      <span>Control scope, limits, validation, and role profiles.</span>
+      <span>Every field of <code>.diffowl.json</code>, with its security ceilings.</span>
     </a>
-    <a href="./guides/finding-discussions/">
-      <strong>Finding discussions</strong>
-      <span>Accept, rebut, resolve, suppress, and reassess findings.</span>
+    <a href="./reference/cli/">
+      <strong>CLI reference</strong>
+      <span>Options, input schema, report shape, and exit codes.</span>
     </a>
     <a href="./reference/outcomes/">
       <strong>Review outcomes</strong>
-      <span>Interpret clean, partial, limited, failed, and abstained runs.</span>
+      <span>The typed outcome union and the material finding shape.</span>
+    </a>
+    <a href="./guides/durable-state/">
+      <strong>Durable state</strong>
+      <span>Git-ref state, self-hosted directories, and the request router.</span>
     </a>
   </div>
 </section>
 
-<section class="home-section human-handoff">
-  <p class="handoff-statement">Automation stops. Human judgment starts.</p>
-  <div>
-    <p>
-      A clean result means that the permitted review found no material findings. It does not prove
-      correctness or permit a merge without review.
-    </p>
-    <a href="./getting-started/introduction/">Understand the review boundary</a>
-  </div>
+<section class="home-section review-boundary">
+  <img class="theme-swap-light" src={branchLight.src} alt="" />
+  <img class="theme-swap-dark" src={branchDark.src} alt="" />
+  <h2>Automation stops. Human judgment starts.</h2>
+  <p>
+    A clean result means Diffowl found no material problems in what it was allowed to check. It is
+    not proof the change is correct, and it is not an approval.
+  </p>
+  <a href="./getting-started/introduction/">What Diffowl does and does not do</a>
 </section>
