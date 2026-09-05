@@ -1,7 +1,25 @@
 {
-  "name": "diffowl",
+  "name": "review-owl",
   "version": "0.1.0",
-  "private": true,
+  "description": "Self-hostable, evidence-backed pull-request review. Review engine, GitHub Action, and local CLI.",
+  "keywords": [
+    "ai",
+    "code-review",
+    "diffowl",
+    "github-action",
+    "pull-request",
+    "review-owl",
+    "self-hosted"
+  ],
+  "homepage": "https://d4nz-jpg.github.io/diffowl/",
+  "bugs": {
+    "url": "https://github.com/D4NZ-jpg/diffowl/issues"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/D4NZ-jpg/diffowl.git"
+  },
   "bin": {
     "diffowl": "dist/cli.js"
   },
@@ -10,7 +28,8 @@
     "dist",
     "review-request",
     "examples/representative-repository",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "type": "module",
   "exports": {
@@ -30,7 +49,8 @@
     "duplication": "jscpd",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "check": "npm run format:check && npm run lint && npm run duplication && npm run typecheck && npm test && npm run build"
+    "check": "npm run format:check && npm run lint && npm run duplication && npm run typecheck && npm test && npm run build",
+    "prepublishOnly": "npm run check"
   },
   "dependencies": {
     "minimatch": "^10.2.6",

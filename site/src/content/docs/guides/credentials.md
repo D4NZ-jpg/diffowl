@@ -46,7 +46,7 @@ Local credentials, tools, and validation are classified `local_user_authorized`.
 When calling `runReview` directly, supply the profile map yourself:
 
 ```ts
-import { runReview, type DiffowlCredentials } from "diffowl";
+import { runReview, type DiffowlCredentials } from "review-owl";
 
 const credentialProfiles: Record<string, DiffowlCredentials> = {
   default: { type: "env" },

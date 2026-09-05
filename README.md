@@ -170,7 +170,14 @@ Diffowl ignores quoted, fenced, multiline, or command-looking text that is not a
 
 ## Local CLI
 
-Use Node.js 22 or newer.
+Use Node.js 22 or newer. Install from npm:
+
+```bash
+npm install -g review-owl
+diffowl review --input pull-request.json --policy .diffowl.json
+```
+
+Or run from a clone:
 
 ```bash
 npm install

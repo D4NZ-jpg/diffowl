@@ -8,14 +8,14 @@ The GitHub Action and the local CLI are both thin adapters around one exported e
 The package entry point is `src/review-engine.ts`, exported as the `diffowl` module root.
 
 ```ts
-import { classifyTrust, runReview, type ReviewOutcome } from "diffowl";
+import { classifyTrust, runReview, type ReviewOutcome } from "review-owl";
 ```
 
 ## Minimal embedding
 
 ```ts
 import { readFile } from "node:fs/promises";
-import { classifyTrust, runReview } from "diffowl";
+import { classifyTrust, runReview } from "review-owl";
 
 const outcome = await runReview(
   {
@@ -92,7 +92,7 @@ All dependencies are optional; defaults give you the standard RunCell-backed pip
 `FileSystemReviewPersistenceStore` is exported for filesystem state:
 
 ```ts
-import { FileSystemReviewPersistenceStore } from "diffowl";
+import { FileSystemReviewPersistenceStore } from "review-owl";
 
 const persistence = new FileSystemReviewPersistenceStore("/srv/diffowl-state");
 ```
@@ -151,7 +151,11 @@ Serialize the full outcome if you archive results; `run.outcome` inside run meta
 The entry point also exports the evaluation and release-gate helpers:
 
 ```ts
-import { evaluateSyntheticCorpus, createV1ReleaseReportCard, evaluateV1ReleaseGate } from "diffowl";
+import {
+  evaluateSyntheticCorpus,
+  createV1ReleaseReportCard,
+  evaluateV1ReleaseGate,
+} from "review-owl";
 ```
 
 A synthetic corpus pairs material-finding cases with clean controls and expected typed outcomes. `evaluateSyntheticCorpus` produces per-case reports; the release-gate helpers aggregate them into a report card with required evidence and threat-test ids. See [`examples/synthetic-evaluation-corpus.json`](https://github.com/D4NZ-jpg/diffowl/blob/main/examples/synthetic-evaluation-corpus.json) for the corpus shape.

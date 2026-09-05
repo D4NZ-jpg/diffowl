@@ -8,10 +8,16 @@ The local CLI runs the same review engine contract used by the GitHub Action. Us
 ## Requirements
 
 - Node.js 22 or newer
-- a local clone of Diffowl
+- `npm install -g review-owl`, or a local clone of Diffowl
 - local provider credentials supported by RunCell
 
-## Build and run
+## Install
+
+```bash
+npm install -g review-owl
+```
+
+The package installs the `diffowl` command. To run from a clone instead:
 
 ```bash
 npm install
