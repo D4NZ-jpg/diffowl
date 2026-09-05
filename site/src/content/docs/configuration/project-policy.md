@@ -83,10 +83,10 @@ Values above a ceiling are a configuration failure, not a clamp. Exceeding `revi
 
 An array of at most 10 commands. Each command:
 
-| Field            | Type                | Constraint                                                          |
-| ---------------- | ------------------- | ------------------------------------------------------------------- |
-| `argv`           | `string[]`          | Non-empty array of non-empty strings. Argv, never a shell string.   |
-| `timeoutSeconds` | positive integer    | At most 600, and at most `limits.reviewTimeoutSeconds`.             |
+| Field            | Type             | Constraint                                                        |
+| ---------------- | ---------------- | ----------------------------------------------------------------- |
+| `argv`           | `string[]`       | Non-empty array of non-empty strings. Argv, never a shell string. |
+| `timeoutSeconds` | positive integer | At most 600, and at most `limits.reviewTimeoutSeconds`.           |
 
 Validation commands run only in contexts whose trust class permits them: sandboxed in trusted same-repo Action runs, user-authorized in local CLI runs, denied for fork and Dependabot pull requests. Command output is captured with a 64 KiB cap per attempt and recorded as verification evidence.
 
@@ -94,24 +94,24 @@ Validation commands run only in contexts whose trust class permits them: sandbox
 
 Enables isolated validation of suggested patches before they become GitHub suggestion blocks.
 
-| Field             | Type     | Constraint                                                             |
-| ----------------- | -------- | ---------------------------------------------------------------------- |
-| `sandboxImage`    | `string` | Must be a digest-pinned image reference (`name@sha256:<64 hex>`).      |
-| `validationRules` | array    | At most 10 rules.                                                      |
+| Field             | Type     | Constraint                                                        |
+| ----------------- | -------- | ----------------------------------------------------------------- |
+| `sandboxImage`    | `string` | Must be a digest-pinned image reference (`name@sha256:<64 hex>`). |
+| `validationRules` | array    | At most 10 rules.                                                 |
 
 Each rule:
 
-| Field          | Type       | Constraint                                                              |
-| -------------- | ---------- | ----------------------------------------------------------------------- |
-| `includePaths` | `string[]` | Non-empty strings; patch paths this rule applies to.                    |
-| `commandIndex` | integer    | Zero-based index into `verification.validationCommands`. Must exist.    |
+| Field          | Type       | Constraint                                                           |
+| -------------- | ---------- | -------------------------------------------------------------------- |
+| `includePaths` | `string[]` | Non-empty strings; patch paths this rule applies to.                 |
+| `commandIndex` | integer    | Zero-based index into `verification.validationCommands`. Must exist. |
 
 Tag-only image references are rejected. Pinning by digest keeps the validation environment reproducible and prevents tag-swap substitution.
 
 ## `reviewRequests` (optional)
 
-| Field             | Type             | Default | Minimum | Meaning                                              |
-| ----------------- | ---------------- | ------- | ------- | ---------------------------------------------------- |
+| Field             | Type             | Default | Minimum | Meaning                                                |
+| ----------------- | ---------------- | ------- | ------- | ------------------------------------------------------ |
 | `cooldownSeconds` | positive integer | 300     | 60      | Minimum delay between accepted manual review requests. |
 
 Values below the 60-second security minimum are a configuration failure.
@@ -120,9 +120,9 @@ Values below the 60-second security minimum are a configuration failure.
 
 Controls where non-blocking advisory suggestions appear on GitHub. Material Findings are always published and are not affected.
 
-| Field        | Values                       | Default   | Meaning                                                                                                                                              |
-| ------------ | ---------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `advisories` | `off`, `summary`, `inline`   | `summary` | `off`: suggestions stay in the engine outcome only. `summary`: one collapsed block at the end of the pull-request review plus a count in the job summary. `inline`: each suggestion anchored to a changed line becomes its own review comment; the rest go in the collapsed block. |
+| Field        | Values                     | Default   | Meaning                                                                                                                                                                                                                                                                            |
+| ------------ | -------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `advisories` | `off`, `summary`, `inline` | `summary` | `off`: suggestions stay in the engine outcome only. `summary`: one collapsed block at the end of the pull-request review plus a count in the job summary. `inline`: each suggestion anchored to a changed line becomes its own review comment; the rest go in the collapsed block. |
 
 Suggestions never change Review readiness or the check conclusion. A `clean` review with suggestions publishes a non-approving comment review containing only the collapsed block. Start with `summary`; switch to `inline` if the team acts on suggestions, or `off` if they add noise.
 
@@ -130,10 +130,10 @@ Suggestions never change Review readiness or the check conclusion. A `clean` rev
 
 Exactly three roles are supported: `reviewer`, `challenger`, and `verifier`. Each profile requires:
 
-| Field               | Type   | Meaning                                                     |
-| ------------------- | ------ | ----------------------------------------------------------- |
-| `provider`          | string | Provider identifier passed to the RunCell execution layer.  |
-| `model`             | string | Model identifier for that provider.                         |
+| Field               | Type   | Meaning                                                      |
+| ------------------- | ------ | ------------------------------------------------------------ |
+| `provider`          | string | Provider identifier passed to the RunCell execution layer.   |
+| `model`             | string | Model identifier for that provider.                          |
 | `credentialProfile` | string | Named credential profile resolved by the adapter at runtime. |
 
 The policy names credential profiles; it never contains raw secrets. See [Credentials and providers](../../guides/credentials/) for how profiles resolve in each adapter.
@@ -142,14 +142,14 @@ The policy names credential profiles; it never contains raw secrets. See [Creden
 
 Ceilings are non-overridable. Policy that exceeds them fails closed.
 
-| Ceiling                        | Value       |
-| ------------------------------ | ----------- |
-| `reviewTimeoutSeconds`         | 3,600 s     |
-| `maxFindings`                  | 100         |
-| Validation command count       | 10          |
-| Validation command timeout     | 600 s       |
-| Validation output per attempt  | 64 KiB      |
-| Repository evidence per file   | 64 KiB      |
+| Ceiling                       | Value   |
+| ----------------------------- | ------- |
+| `reviewTimeoutSeconds`        | 3,600 s |
+| `maxFindings`                 | 100     |
+| Validation command count      | 10      |
+| Validation command timeout    | 600 s   |
+| Validation output per attempt | 64 KiB  |
+| Repository evidence per file  | 64 KiB  |
 
 ## Failure behavior
 
