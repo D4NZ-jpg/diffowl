@@ -70,6 +70,26 @@ export interface ProjectPolicy {
   reviewRequests?: {
     cooldownSeconds?: number;
   };
+  presentation?: {
+    advisories?: AdvisoryPresentation;
+  };
+}
+
+/**
+ * Where advisory suggestions appear on GitHub. Material findings are always
+ * published; this only controls the non-blocking tier.
+ * - `off`: engine output only, nothing on GitHub.
+ * - `summary`: one collapsed block at the end of the review body and a count in
+ *   the job summary. Default.
+ * - `inline`: each anchored advisory becomes its own review comment.
+ */
+export type AdvisoryPresentation = "off" | "summary" | "inline";
+
+export const ADVISORY_PRESENTATIONS: readonly AdvisoryPresentation[] = ["off", "summary", "inline"];
+export const ADVISORY_PRESENTATION_DEFAULT: AdvisoryPresentation = "summary";
+
+export function advisoryPresentation(policy: ProjectPolicy): AdvisoryPresentation {
+  return policy.presentation?.advisories ?? ADVISORY_PRESENTATION_DEFAULT;
 }
 
 export type PolicyParseResult =
@@ -265,11 +285,29 @@ function validateReviewRequests(value: unknown): string | undefined {
     : undefined;
 }
 
+function validatePresentation(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return "Project policy presentation must be an object.";
+  const fieldError = unsupportedField(value, ["advisories"], "presentation");
+  if (fieldError !== undefined || value.advisories === undefined) return fieldError;
+  return ADVISORY_PRESENTATIONS.includes(value.advisories as AdvisoryPresentation)
+    ? undefined
+    : `Project policy presentation.advisories must be one of ${ADVISORY_PRESENTATIONS.map((option) => `"${option}"`).join(", ")}.`;
+}
+
 function validatePolicy(value: unknown): string | undefined {
   if (!isRecord(value)) return "Project policy must be a JSON object.";
   const fieldError = unsupportedField(
     value,
-    ["version", "scope", "limits", "verification", "roleProfiles", "reviewRequests"],
+    [
+      "version",
+      "scope",
+      "limits",
+      "verification",
+      "roleProfiles",
+      "reviewRequests",
+      "presentation",
+    ],
     "root",
   );
   if (fieldError !== undefined) return fieldError;
@@ -282,7 +320,8 @@ function validatePolicy(value: unknown): string | undefined {
       isRecord(value.limits) ? value.limits.reviewTimeoutSeconds : undefined,
     ) ??
     validateRoleProfiles(value.roleProfiles) ??
-    validateReviewRequests(value.reviewRequests)
+    validateReviewRequests(value.reviewRequests) ??
+    validatePresentation(value.presentation)
   );
 }
 

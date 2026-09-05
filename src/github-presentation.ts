@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type {
+  AdvisorySuggestion,
   FindingLifecycleState,
   MaterialFinding,
   ReviewOutcome,
@@ -8,6 +9,7 @@ import type {
 } from "./review-engine.js";
 import { findingIdentityMarker } from "./finding-discussion.js";
 import { findingShortIdentityFromFingerprint } from "./finding-fingerprint.js";
+import { type AdvisoryPresentation, advisoryPresentation } from "./project-policy.js";
 import { truncateUtf8 } from "./utf8.js";
 
 export type GitHubCheckConclusion =
@@ -55,6 +57,54 @@ export function materialFindings(outcome: ReviewOutcome): MaterialFinding[] {
     return outcome.materialFindings;
   }
   return outcome.type === "partial_coverage" ? (outcome.materialFindings ?? []) : [];
+}
+
+/**
+ * Advisory suggestions carried by the outcome, filtered by the effective
+ * policy's presentation setting. Returns an empty list when the policy turns
+ * advisories off or the outcome has no configured policy.
+ */
+export function publishedAdvisories(outcome: ReviewOutcome): {
+  mode: AdvisoryPresentation;
+  suggestions: AdvisorySuggestion[];
+} {
+  if (!("policy" in outcome)) return { mode: "off", suggestions: [] };
+  const mode = advisoryPresentation(outcome.policy.effective);
+  if (mode === "off" || !("advisorySuggestions" in outcome)) return { mode, suggestions: [] };
+  return { mode, suggestions: outcome.advisorySuggestions ?? [] };
+}
+
+function advisoryLocation(suggestion: AdvisorySuggestion): string {
+  const location = suggestion.location;
+  if (location === undefined) return "";
+  const line = location.line ?? location.startLine;
+  return ` (\`${location.path}${line === undefined ? "" : `:${line}`}\`)`;
+}
+
+export function advisoryBody(suggestion: AdvisorySuggestion): string {
+  return `**Suggestion:** ${suggestion.summary}${advisoryLocation(suggestion)}\n\n${suggestion.rationale}\n\n_Non-blocking. Review OWL suggestions do not affect Review readiness._`;
+}
+
+/**
+ * One collapsed block listing every advisory. Rendered at the end of the
+ * pull-request review body in `summary` mode, and for advisories that could
+ * not be anchored inline in `inline` mode.
+ */
+export function advisorySummaryBlock(suggestions: AdvisorySuggestion[]): string[] {
+  if (suggestions.length === 0) return [];
+  const lines = [
+    "",
+    `<details><summary>${suggestions.length} non-blocking suggestion${suggestions.length === 1 ? "" : "s"} (do not affect Review readiness)</summary>`,
+    "",
+  ];
+  for (const suggestion of suggestions) {
+    lines.push(
+      `- **${suggestion.summary}**${advisoryLocation(suggestion)}  `,
+      `  ${suggestion.rationale}`,
+    );
+  }
+  lines.push("", "</details>");
+  return lines;
 }
 
 export function isActiveFinding(finding: MaterialFinding): boolean {
@@ -233,6 +283,7 @@ export function jobSummaryBody(
     `**Review outcome:** \`${outcome.type}\``,
     `**Publication result:** \`${publicationResult}\``,
     `**Material Findings:** ${findings.length}${findings.length === 0 ? "" : ` (${lifecycleCounts(findings)})`}`,
+    `**Suggestions (non-blocking):** ${publishedAdvisories(outcome).suggestions.length}`,
     `**Verification count:** ${attempts.length}${attempts.length === 0 ? "" : ` (${attempts.map((attempt) => attempt.status).join(", ")})`}`,
     `**Coverage limits:** ${coverageLimits(outcome)}`,
   ];

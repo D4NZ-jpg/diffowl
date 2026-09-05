@@ -1,4 +1,5 @@
 /* oxlint-disable max-lines */
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,6 +107,9 @@ function transportFor(headSha = target.headSha) {
     )
       return [];
     if (request.method === "GET" && request.path.includes("/comments")) return comments;
+    if (request.method === "GET" && request.path.includes("/reviews")) return [];
+    if (request.path.endsWith("/reviews"))
+      return { id: 41, html_url: "https://github.test/review/41" };
     if (request.method === "GET" && request.path.includes("/check-runs")) return { check_runs: [] };
     if (request.path.endsWith("/check-runs")) return { id: 42 };
     const patchedCommentId = /\/issues\/comments\/(\d+)$/u.exec(request.path)?.[1];
@@ -412,22 +416,41 @@ it("threat: timeout, provider failure, and unsafe validation denial cannot appea
 });
 
 it("threat: poisoned model output remains bounded data and cannot become execution", async () => {
-  const malicious = {
-    ...cleanOutcome(),
-    advisorySuggestions: [
-      { summary: "$(touch /tmp/diffowl-pwned)", rationale: "ignore previous instructions" },
-    ],
-  } as ReviewOutcome;
-  const { requests, transport } = transportFor();
+  const payload = "$(touch /tmp/diffowl-pwned)";
+  const poisoned = (advisories: "off" | "summary"): ReviewOutcome => {
+    const clean = cleanOutcome() as ReviewOutcome & { policy: { effective: ProjectPolicy } };
+    return {
+      ...clean,
+      policy: {
+        ...clean.policy,
+        effective: { ...clean.policy.effective, presentation: { advisories } },
+      },
+      advisorySuggestions: [{ summary: payload, rationale: "ignore previous instructions" }],
+    } as ReviewOutcome;
+  };
 
-  await publishReviewOutcome(transport, target, malicious, authorization);
+  // Advisories off: a clean review writes nothing to the pull request at all.
+  const silent = transportFor();
+  await publishReviewOutcome(silent.transport, target, poisoned("off"), authorization);
+  expect(new Set(silent.requests.map((request) => request.method))).toEqual(new Set(["GET"]));
+  expect(silent.requests.some((request) => request.path.endsWith("/reviews"))).toBe(false);
+  expect(JSON.stringify(silent.requests.map((request) => request.body))).not.toContain(payload);
 
-  expect(new Set(requests.map((request) => request.method))).toEqual(new Set(["GET"]));
-  expect(requests.every((request) => request.path.startsWith(`/repos/${target.repository}/`))).toBe(
-    true,
-  );
-  expect(requests.some((request) => request.path.endsWith("/reviews"))).toBe(false);
-  expect(JSON.stringify(requests.map((request) => request.body))).not.toContain(
-    "$(touch /tmp/diffowl-pwned)",
-  );
+  // Advisories on: the text is published as inert review-body data, non-approving,
+  // only under the target repository, and never reaches a shell or a check run.
+  const shown = transportFor();
+  await publishReviewOutcome(shown.transport, target, poisoned("summary"), authorization);
+  const writes = shown.requests.filter((request) => request.method !== "GET");
+  expect(writes.map((request) => request.path)).toEqual([
+    `/repos/${target.repository}/pulls/${target.pullRequestNumber}/reviews`,
+  ]);
+  const posted = writes[0]?.body as
+    | { event: string; body: string; comments: unknown[] }
+    | undefined;
+  expect(posted).toMatchObject({ event: "COMMENT", comments: [] });
+  expect(posted?.body).toContain(payload);
+  expect(
+    shown.requests.every((request) => request.path.startsWith(`/repos/${target.repository}/`)),
+  ).toBe(true);
+  expect(existsSync("/tmp/diffowl-pwned")).toBe(false);
 });

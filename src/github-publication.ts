@@ -5,11 +5,14 @@ import {
   type FindingDiscussionPublicationReceipt,
   type FindingDiscussionPublicationUpdate,
 } from "./github-finding-command.js";
-import type { MaterialFinding, ReviewOutcome } from "./review-engine.js";
+import type { AdvisorySuggestion, MaterialFinding, ReviewOutcome } from "./review-engine.js";
 import {
   GITHUB_BODY_LIMIT,
+  advisoryBody,
+  advisorySummaryBlock,
   findingBody,
   isActiveFinding,
+  publishedAdvisories,
   unanchoredFindingBody,
   materialFindings,
 } from "./github-presentation.js";
@@ -224,14 +227,57 @@ function lifecycleUpdates(
   return updates;
 }
 
-function reviewBody(unanchored: MaterialFinding[]): string {
-  const lines = ["Review OWL found material Findings. Use these review threads for discussion."];
+interface PublishedAdvisories {
+  inline: InlineAdvisory[];
+  summary: AdvisorySuggestion[];
+}
+
+type InlineAdvisory = AdvisorySuggestion & { location: { path: string; line: number } };
+
+function inlineAdvisory(
+  suggestion: AdvisorySuggestion,
+  lines: Set<string>,
+): suggestion is InlineAdvisory {
+  const location = suggestion.location;
+  return (
+    location !== undefined &&
+    location.line !== undefined &&
+    lines.has(`${location.path}\0${location.line}`)
+  );
+}
+
+/**
+ * Split advisories by policy mode: `inline` anchors what it can and folds the
+ * rest into the summary block; `summary` folds everything; `off` publishes none.
+ */
+function splitAdvisories(outcome: ReviewOutcome, lines: Set<string>): PublishedAdvisories {
+  const { mode, suggestions } = publishedAdvisories(outcome);
+  if (mode !== "inline") return { inline: [], summary: suggestions };
+  return {
+    inline: suggestions.filter((suggestion): suggestion is InlineAdvisory =>
+      inlineAdvisory(suggestion, lines),
+    ),
+    summary: suggestions.filter((suggestion) => !inlineAdvisory(suggestion, lines)),
+  };
+}
+
+function reviewBody(
+  unanchored: MaterialFinding[],
+  hasMaterial: boolean,
+  advisories: AdvisorySuggestion[],
+): string {
+  const lines = [
+    hasMaterial
+      ? "Review OWL found material Findings. Use these review threads for discussion."
+      : "Review OWL found no material Findings. The suggestions below are non-blocking.",
+  ];
   if (unanchored.length > 0) {
     lines.push("", "### Findings without a current inline anchor");
     for (const finding of unanchored) {
       lines.push("", unanchoredFindingBody(finding));
     }
   }
+  lines.push(...advisorySummaryBlock(advisories));
   return lines.join("\n");
 }
 
@@ -311,21 +357,32 @@ async function publishReview(
   target: PublicationTarget,
   findings: InlineFinding[],
   unanchored: MaterialFinding[],
+  advisories: PublishedAdvisories,
   reserveEffect?: PublicationAuthorization["reserveEffect"],
 ): Promise<ReviewReceipt | undefined> {
-  if (findings.length === 0 && unanchored.length === 0) return undefined;
-  const visibleBody = reviewBody(unanchored);
-  const comments: ReviewCommentPayload[] = findings.map((finding) => {
-    const patch = finding.suggestedPatch;
-    const multiLine = patch !== undefined && patch.startLine < patch.endLine;
-    return {
-      path: finding.location.path,
-      line: patch?.endLine ?? finding.location.line,
+  const hasMaterial = findings.length > 0 || unanchored.length > 0;
+  const hasAdvisories = advisories.inline.length > 0 || advisories.summary.length > 0;
+  if (!hasMaterial && !hasAdvisories) return undefined;
+  const visibleBody = reviewBody(unanchored, hasMaterial, advisories.summary);
+  const comments: ReviewCommentPayload[] = [
+    ...findings.map((finding) => {
+      const patch = finding.suggestedPatch;
+      const multiLine = patch !== undefined && patch.startLine < patch.endLine;
+      return {
+        path: finding.location.path,
+        line: patch?.endLine ?? finding.location.line,
+        side: "RIGHT",
+        body: findingBody(finding),
+        ...(multiLine ? { start_line: patch.startLine, start_side: "RIGHT" } : {}),
+      };
+    }),
+    ...advisories.inline.map((suggestion) => ({
+      path: suggestion.location.path,
+      line: suggestion.location.line,
       side: "RIGHT",
-      body: findingBody(finding),
-      ...(multiLine ? { start_line: patch.startLine, start_side: "RIGHT" } : {}),
-    };
-  });
+      body: advisoryBody(suggestion),
+    })),
+  ];
   const effectId = reviewEffectId(target, visibleBody, comments);
   const body = `${reviewEffectMarker(effectId)}\n${visibleBody}`;
   if (
@@ -435,6 +492,7 @@ export async function publishReviewOutcome(
       inlineFinding(finding, lines) && !roots.has(finding.fingerprint.value),
   );
   const unanchored = active.filter((finding) => !inlineFinding(finding, lines));
+  const advisories = splitAdvisories(validated, lines);
   await assertCurrentHead(request, target);
   const findingDiscussionEffects: FindingDiscussionPublicationReceipt[] = [];
   for (const update of lifecycleUpdates(validated, roots, target, active)) {
@@ -456,7 +514,14 @@ export async function publishReviewOutcome(
   }
   let review: ReviewReceipt | undefined;
   try {
-    review = await publishReview(request, target, inline, unanchored, authorization?.reserveEffect);
+    review = await publishReview(
+      request,
+      target,
+      inline,
+      unanchored,
+      advisories,
+      authorization?.reserveEffect,
+    );
   } catch (error) {
     if (findingDiscussionEffects.length === 0) throw error;
     const message = error instanceof Error ? error.message : "GitHub publication failed.";

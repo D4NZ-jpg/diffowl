@@ -30,6 +30,9 @@ Policy fields are closed. Any unsupported field, at any nesting level, produces 
   "reviewRequests": {
     "cooldownSeconds": 300
   },
+  "presentation": {
+    "advisories": "summary"
+  },
   "roleProfiles": {
     "reviewer": {
       "provider": "openai",
@@ -50,7 +53,7 @@ Policy fields are closed. Any unsupported field, at any nesting level, produces 
 }
 ```
 
-Required top-level fields: `version`, `scope`, `limits`, `verification`, `roleProfiles`. Optional: `reviewRequests`.
+Required top-level fields: `version`, `scope`, `limits`, `verification`, `roleProfiles`. Optional: `reviewRequests`, `presentation`.
 
 ## `version`
 
@@ -112,6 +115,16 @@ Tag-only image references are rejected. Pinning by digest keeps the validation e
 | `cooldownSeconds` | positive integer | 300     | 60      | Minimum delay between accepted manual review requests. |
 
 Values below the 60-second security minimum are a configuration failure.
+
+## `presentation` (optional)
+
+Controls where non-blocking advisory suggestions appear on GitHub. Material Findings are always published and are not affected.
+
+| Field        | Values                       | Default   | Meaning                                                                                                                                              |
+| ------------ | ---------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `advisories` | `off`, `summary`, `inline`   | `summary` | `off`: suggestions stay in the engine outcome only. `summary`: one collapsed block at the end of the pull-request review plus a count in the job summary. `inline`: each suggestion anchored to a changed line becomes its own review comment; the rest go in the collapsed block. |
+
+Suggestions never change Review readiness or the check conclusion. A `clean` review with suggestions publishes a non-approving comment review containing only the collapsed block. Start with `summary`; switch to `inline` if the team acts on suggestions, or `off` if they add noise.
 
 ## `roleProfiles`
 

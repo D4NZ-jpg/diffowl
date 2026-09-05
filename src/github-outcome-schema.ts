@@ -121,6 +121,10 @@ const projectPolicySchema = z.strictObject({
     challenger: roleProfileSchema,
     verifier: roleProfileSchema,
   }),
+  reviewRequests: z.strictObject({ cooldownSeconds: positiveInteger.optional() }).optional(),
+  presentation: z
+    .strictObject({ advisories: z.enum(["off", "summary", "inline"]).optional() })
+    .optional(),
 });
 
 const locationSchema = z.strictObject({

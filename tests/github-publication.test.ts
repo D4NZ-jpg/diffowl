@@ -19,6 +19,7 @@ import {
   jobSummaryBody,
 } from "../src/github-presentation.js";
 import { parseGitHubReviewOutcome } from "../src/github-outcome-schema.js";
+import { type AdvisoryPresentation, parseProjectPolicy } from "../src/project-policy.js";
 import { MAX_PUBLICATION_OUTCOME_BYTES } from "../src/github-publication-validation.js";
 import type { FindingFingerprint, MaterialFinding, ReviewOutcome } from "../src/review-engine.js";
 import { reviewedPullRequest, trustedSameRepoTrust } from "./review-fixtures.js";
@@ -1173,4 +1174,142 @@ function publicationAdapterTests(): void {
 
 describe("GitHub publication adapter", () => {
   publicationAdapterTests();
+});
+
+function withAdvisories(
+  base: ReviewOutcome,
+  mode: AdvisoryPresentation | undefined,
+): ReviewOutcome {
+  if (!("policy" in base) || !("advisorySuggestions" in base)) throw new Error("fixture");
+  return {
+    ...base,
+    policy: {
+      ...base.policy,
+      effective: {
+        ...base.policy.effective,
+        ...(mode === undefined ? {} : { presentation: { advisories: mode } }),
+      },
+    },
+    advisorySuggestions: [
+      {
+        summary: "Anchored suggestion",
+        rationale: "Rename for clarity.",
+        location: { path: "src/handler.ts", line: 7 },
+      },
+      {
+        summary: "Unanchored suggestion",
+        rationale: "Consider a doc comment.",
+        location: { path: "src/other.ts", line: 3 },
+      },
+    ],
+  } as ReviewOutcome;
+}
+
+function reviewRequest(requests: GitHubRequest[]): GitHubRequest | undefined {
+  return requests.find((request) => request.path.endsWith("/reviews"));
+}
+
+interface PostedReview {
+  event: string;
+  body: string;
+  comments: Array<{ path: string; line: number; body: string }>;
+}
+
+function postedReview(requests: GitHubRequest[]): PostedReview {
+  const review = reviewRequest(requests);
+  if (review === undefined) throw new Error("no review was posted");
+  return review.body as PostedReview;
+}
+
+describe("advisory suggestion presentation", () => {
+  it("validates the presentation policy field", () => {
+    const policy = (advisories: unknown) =>
+      JSON.stringify({
+        ...(outcome("clean") as { policy: { effective: object } }).policy.effective,
+        presentation: { advisories },
+      });
+    expect(parseProjectPolicy(policy("summary"))).toMatchObject({ valid: true });
+    expect(parseProjectPolicy(policy("inline"))).toMatchObject({ valid: true });
+    expect(parseProjectPolicy(policy("off"))).toMatchObject({ valid: true });
+    expect(parseProjectPolicy(policy("loud"))).toMatchObject({
+      valid: false,
+      reason: expect.stringContaining("presentation.advisories must be one of"),
+    });
+  });
+
+  it("defaults to a collapsed summary block on a clean review and posts no inline comments", async () => {
+    const { requests, transport } = fakeTransport();
+    const clean = withAdvisories(outcome("clean"), undefined);
+    const receipt = await publishReviewOutcome(transport, target, clean, authorization);
+    const review = postedReview(requests);
+    expect(receipt).toMatchObject({ result: "complete", inlineCommentCount: 0 });
+    expect(review).toMatchObject({ event: "COMMENT", comments: [] });
+    const { body } = review;
+    expect(body).toContain("no material Findings");
+    expect(body).toContain("<details><summary>2 non-blocking suggestions");
+    expect(body).toContain("Anchored suggestion");
+    expect(body).toContain("Unanchored suggestion");
+    expect(jobSummaryBody(clean, "complete")).toContain("**Suggestions (non-blocking):** 2");
+  });
+
+  it("inline mode anchors what it can and folds the rest, without touching material findings", async () => {
+    const { requests, transport } = fakeTransport();
+    const findings = withAdvisories(outcome("findings"), "inline");
+    const receipt = await publishReviewOutcome(transport, target, findings, authorization);
+    const review = reviewRequest(requests);
+    const payload = review?.body as {
+      body: string;
+      comments: Array<{ path: string; line: number; body: string }>;
+    };
+    expect(receipt).toMatchObject({ result: "complete", inlineCommentCount: 1 });
+    const [material, advisory] = payload.comments;
+    expect(payload.comments).toHaveLength(2);
+    expect(material).toMatchObject({ path: "src/handler.ts", line: 7 });
+    expect(material?.body).toContain(FINDING_COMMENT_MARKER);
+    expect(advisory).toMatchObject({ path: "src/handler.ts", line: 7 });
+    expect(advisory?.body).toContain("**Suggestion:** Anchored suggestion");
+    expect(advisory?.body).toContain("Non-blocking");
+    expect(payload.body).toContain("<details><summary>1 non-blocking suggestion (");
+    expect(payload.body).toContain("Unanchored suggestion");
+    expect(payload.body).not.toContain("Anchored suggestion**");
+  });
+});
+
+describe("advisory suggestion presentation: off and schema", () => {
+  it("off mode publishes nothing for a clean review and no advisory text for findings", async () => {
+    const clean = fakeTransport();
+    await publishReviewOutcome(
+      clean.transport,
+      target,
+      withAdvisories(outcome("clean"), "off"),
+      authorization,
+    );
+    expect(reviewRequest(clean.requests)).toBeUndefined();
+
+    const found = fakeTransport();
+    await publishReviewOutcome(
+      found.transport,
+      target,
+      withAdvisories(outcome("findings"), "off"),
+      authorization,
+    );
+    const payload = postedReview(found.requests);
+    expect(payload.comments).toHaveLength(1);
+    expect(payload.body).not.toContain("suggestion");
+  });
+
+  it("accepts an outcome whose effective policy carries presentation and reviewRequests", () => {
+    const parsed = parseGitHubReviewOutcome({
+      ...withAdvisories(outcome("clean"), "summary"),
+      policy: {
+        ...(outcome("clean") as { policy: object }).policy,
+        effective: {
+          ...(outcome("clean") as { policy: { effective: object } }).policy.effective,
+          presentation: { advisories: "summary" },
+          reviewRequests: { cooldownSeconds: 300 },
+        },
+      },
+    });
+    expect(parsed).toMatchObject({ type: "clean" });
+  });
 });
