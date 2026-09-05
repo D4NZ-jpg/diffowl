@@ -4,6 +4,16 @@ import type { AgentOptions, RunResult, Sandbox } from "runcell";
 import { createRunCellRoleExecutor } from "../src/runcell-orchestration.js";
 import type { RoleExecutionRequest } from "../src/review-engine.js";
 
+const zeroUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  totalTokens: 0,
+  costUsd: 0,
+  costMeasured: false,
+};
+
 function requestFor(role: "reviewer" | "challenger" | "verifier"): RoleExecutionRequest {
   const purposes = {
     reviewer: "generate_candidates" as const,
@@ -102,6 +112,7 @@ describe("createRunCellRoleExecutor", () => {
               files: [],
               finishReason: "stop",
               sessionId: `session-${index}`,
+              usage: zeroUsage,
             } as RunResult<unknown>;
           },
         };
@@ -158,6 +169,7 @@ describe("createRunCellRoleExecutor", () => {
             files: [],
             finishReason: "stop",
             sessionId: "limited-session",
+            usage: zeroUsage,
           }) as RunResult<unknown>,
       }),
     });
