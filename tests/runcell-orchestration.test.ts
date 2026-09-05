@@ -199,4 +199,56 @@ describe("createRunCellRoleExecutor", () => {
       },
     });
   });
+
+  it("runs roles inside a repository workspace without snapshotting the checkout", async () => {
+    const workspaces: Array<{ rootDir: string } | undefined> = [];
+    let snapshotCalls = 0;
+    const prompts: string[] = [];
+    let files: { path: string }[] | undefined;
+    const execute = createRunCellRoleExecutor({
+      createSandbox: async (workspace) => {
+        workspaces.push(workspace);
+        const sandbox = sandboxFor("workspace");
+        return {
+          ...sandbox,
+          snapshot: async () => {
+            snapshotCalls += 1;
+            return sandbox.snapshot();
+          },
+        };
+      },
+      createAgent: (options) => ({
+        run: async (run) => {
+          prompts.push(options.systemPrompt ?? "");
+          files = run.files;
+          return {
+            data: roleOutputs[0],
+            text: "",
+            files: [],
+            finishReason: "stop",
+            sessionId: "workspace-session",
+            usage: zeroUsage,
+          } as RunResult<unknown>;
+        },
+      }),
+    });
+
+    const result = await execute({
+      ...requestFor("reviewer"),
+      workspace: { rootDir: "/tmp/example-checkout" },
+    });
+
+    expect(workspaces).toEqual([{ rootDir: "/tmp/example-checkout" }]);
+    expect(files?.map(({ path }) => path)).toEqual([
+      ".diffowl/pull-request.diff",
+      ".diffowl/pull-request.json",
+      ".diffowl/role-input.json",
+    ]);
+    expect(prompts[0]).toContain("repository checkout at the reviewed head revision");
+    expect(snapshotCalls).toBe(0);
+    expect(result).toMatchObject({
+      type: "completed",
+      artifact: { role: "reviewer", snapshot: { version: 1, files: [] } },
+    });
+  });
 });

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { createHostVerificationAdapter } from "./host-verification.js";
@@ -8,6 +9,7 @@ import {
   type DiffowlCredentials,
   type FindingLedger,
   type PullRequestInput,
+  type ReviewDependencies,
   type ReviewOutcome,
   type ReviewRunRecord,
   type RoleExecutionRequest,
@@ -74,11 +76,15 @@ function isPullRequestInput(value: unknown): value is CliPullRequestInput {
   );
 }
 
+type CliCredentialSource = "local" | "env";
+
 interface CliOptions {
   input: string;
   policy: string;
   stateDirectory?: string;
+  repository?: string;
   mode: CliMode;
+  credentials: CliCredentialSource;
 }
 
 function usage(): string {
@@ -87,6 +93,12 @@ function usage(): string {
     "",
     "Options:",
     "  --state-directory <path>  Persist and inspect local run records and Finding ledger state.",
+    "  --repository <path>       Repository checkout at the pull-request head revision. Roles run",
+    "                            inside it and may read files; the verifier may run policy",
+    "                            validation commands there. Omit for diff-only review.",
+    "  --credentials <local|env> Credential source for the default profile. local (default) reads the",
+    "                            local agent directory; env reads *_API_KEY and *_BASE_URL variables",
+    "                            (for example ANTHROPIC_API_KEY plus ANTHROPIC_BASE_URL for a proxy).",
     "  --dry-run                 Run locally without publishing. This is the default.",
     "  --publish                 Request publishing mode; local trust still denies GitHub publication.",
   ].join("\n");
@@ -97,10 +109,33 @@ function optionValue(args: readonly string[], index: number): string | undefined
   return value === undefined || value.startsWith("--") ? undefined : value;
 }
 
-function assignPathOption(options: Partial<CliOptions>, arg: string, value: string): void {
-  if (arg === "--input") options.input = value;
-  else if (arg === "--policy") options.policy = value;
-  else options.stateDirectory = value;
+const flagOptions: Record<string, CliMode> = { "--dry-run": "dry-run", "--publish": "publish" };
+
+type PathOptionKey = "input" | "policy" | "stateDirectory" | "repository";
+
+const pathOptions: Record<string, PathOptionKey> = {
+  "--input": "input",
+  "--policy": "policy",
+  "--state-directory": "stateDirectory",
+  "--repository": "repository",
+};
+
+function applyValueOption(
+  options: Partial<CliOptions>,
+  arg: string,
+  value: string | undefined,
+): string | undefined {
+  if (arg === "--credentials") {
+    if (value !== "local" && value !== "env") {
+      return `--credentials must be "local" or "env".\n\n${usage()}`;
+    }
+    options.credentials = value;
+    return undefined;
+  }
+  const key = pathOptions[arg];
+  if (value === undefined || key === undefined) return `${arg} requires a value.\n\n${usage()}`;
+  options[key] = value;
+  return undefined;
 }
 
 function applyOption(
@@ -108,21 +143,22 @@ function applyOption(
   args: readonly string[],
   index: number,
 ): number | string {
-  const arg = args[index];
-  if (arg === "--dry-run") options.mode = "dry-run";
-  else if (arg === "--publish") options.mode = "publish";
-  else if (arg === "--input" || arg === "--policy" || arg === "--state-directory") {
-    const value = optionValue(args, index);
-    if (value === undefined) return `${arg} requires a value.\n\n${usage()}`;
-    assignPathOption(options, arg, value);
-    return index + 1;
-  } else return `Unknown argument: ${arg}\n\n${usage()}`;
-  return index;
+  const arg = args[index] ?? "";
+  const mode = flagOptions[arg];
+  if (mode !== undefined) {
+    options.mode = mode;
+    return index;
+  }
+  if (arg !== "--credentials" && pathOptions[arg] === undefined) {
+    return `Unknown argument: ${arg}\n\n${usage()}`;
+  }
+  const error = applyValueOption(options, arg, optionValue(args, index));
+  return error ?? index + 1;
 }
 
 function optionsFrom(args: readonly string[]): CliOptions | string {
   if (args[0] !== "review") return usage();
-  const options: Partial<CliOptions> = { mode: "dry-run" };
+  const options: Partial<CliOptions> = { mode: "dry-run", credentials: "local" };
   for (let index = 1; index < args.length; index += 1) {
     const nextIndex = applyOption(options, args, index);
     if (typeof nextIndex === "string") return nextIndex;
@@ -207,6 +243,22 @@ function reportFrom(
   };
 }
 
+function reviewDependencies(options: CliOptions, io: CliIo): ReviewDependencies {
+  return {
+    credentialProfiles: io.credentialProfiles ?? {
+      default: options.credentials === "env" ? { type: "env" } : "local",
+    },
+    executeRole: io.executeRole,
+    verificationAdapter: io.verificationAdapter ?? createHostVerificationAdapter(),
+    persistence:
+      options.stateDirectory === undefined
+        ? undefined
+        : new FileSystemReviewPersistenceStore(options.stateDirectory),
+    repositoryWorkspace:
+      options.repository === undefined ? undefined : { rootDir: resolve(options.repository) },
+  };
+}
+
 export async function runCli(args: readonly string[], io: CliIo = processIo): Promise<number> {
   const options = optionsFrom(args);
   if (typeof options === "string") {
@@ -230,15 +282,7 @@ export async function runCli(args: readonly string[], io: CliIo = processIo): Pr
           contents: await io.readFile(options.policy, "utf8"),
         },
       },
-      {
-        credentialProfiles: io.credentialProfiles ?? { default: "local" },
-        executeRole: io.executeRole,
-        verificationAdapter: io.verificationAdapter ?? createHostVerificationAdapter(),
-        persistence:
-          options.stateDirectory === undefined
-            ? undefined
-            : new FileSystemReviewPersistenceStore(options.stateDirectory),
-      },
+      reviewDependencies(options, io),
     );
     io.stdout(
       `${JSON.stringify(reportFrom(options.mode, outcome, await persistedState(options, input, outcome)))}\n`,

@@ -216,6 +216,15 @@ export interface VerificationAdapter {
   ): Promise<SuggestedPatchValidationResult>;
 }
 
+/**
+ * A repository checkout at the reviewed head revision that roles may read.
+ * Only forwarded when the trust class permits privileged tools; the caller is
+ * responsible for isolation of the host directory.
+ */
+export interface RoleWorkspace {
+  rootDir: string;
+}
+
 export interface RoleExecutionRequest {
   pullRequest: ReviewedPullRequest;
   diff: string;
@@ -225,6 +234,7 @@ export interface RoleExecutionRequest {
   roleInput: unknown;
   maxCandidateFindings: number;
   signal: AbortSignal;
+  workspace?: RoleWorkspace | undefined;
 }
 
 export type RoleExecutionResult =
@@ -807,6 +817,7 @@ export async function orchestrateReviewRoles(
     coverageGaps: [],
   },
   findingReassessmentContexts?: Readonly<Record<string, string>>,
+  workspace?: RoleWorkspace | undefined,
 ): Promise<OrchestrationExecutionResult> {
   const plan = orchestrationPlan(policy);
   const state: OrchestrationState = {
@@ -861,6 +872,7 @@ export async function orchestrateReviewRoles(
       roleInput: state.roleInput,
       maxCandidateFindings: plan.maxCandidateFindings,
       signal,
+      workspace,
     });
     if (result.type !== "completed") {
       if (result.artifact !== undefined) artifacts.push(result.artifact);

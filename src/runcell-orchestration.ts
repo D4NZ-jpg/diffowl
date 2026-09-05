@@ -1,5 +1,6 @@
 import {
   createAgent,
+  createSandbox,
   createVirtualSandbox,
   type AgentEvents,
   type AgentOptions,
@@ -17,6 +18,7 @@ import type {
   RoleExecutionRequest,
   RoleExecutionResult,
   RoleOutput,
+  RoleWorkspace,
 } from "./review-orchestration.js";
 import type { ReviewRole } from "./project-policy.js";
 
@@ -127,12 +129,19 @@ function runEvents(): {
 } {
   const events: RoleExecutionEvent[] = [];
   const changedFiles: ChangedFile[] = [];
+  const trace = process.env.DIFFOWL_DEBUG_PROVIDER === "1";
   return {
     events,
     changedFiles,
     callbacks: {
-      onToolCall: (detail) => events.push({ type: "tool_call", detail }),
-      onToolResult: (detail) => events.push({ type: "tool_result", detail }),
+      onToolCall: (detail) => {
+        if (trace) console.error(`[diffowl] tool_call ${JSON.stringify(detail).slice(0, 300)}`);
+        events.push({ type: "tool_call", detail });
+      },
+      onToolResult: (detail) => {
+        if (trace) console.error(`[diffowl] tool_result ${JSON.stringify(detail).slice(0, 200)}`);
+        events.push({ type: "tool_result", detail });
+      },
       onFileChange: (detail) => {
         changedFiles.push(detail);
         events.push({ type: "file_change", detail });
@@ -149,14 +158,20 @@ function runEvents(): {
 }
 
 function contextFiles(request: RoleExecutionRequest): FileInput[] {
+  const prefix = request.workspace === undefined ? "" : `${WORKSPACE_CONTEXT_DIRECTORY}/`;
   return [
-    { path: "pull-request.diff", text: request.diff },
+    { path: `${prefix}pull-request.diff`, text: request.diff },
     {
-      path: "pull-request.json",
+      path: `${prefix}pull-request.json`,
       text: JSON.stringify(request.pullRequest, undefined, 2),
     },
-    { path: "role-input.json", text: JSON.stringify(request.roleInput, undefined, 2) },
+    { path: `${prefix}role-input.json`, text: JSON.stringify(request.roleInput, undefined, 2) },
   ];
+}
+
+function rolePrompt(request: RoleExecutionRequest): string {
+  const base = rolePrompts[request.step.role];
+  return request.workspace === undefined ? base : `${base}${workspacePromptSuffix}`;
 }
 
 function roleSchema(request: RoleExecutionRequest): AgentSchema {
@@ -177,9 +192,13 @@ async function executionArtifact(
   files: ChangedFile[],
   result?: RunResult<unknown>,
 ): Promise<RoleExecutionArtifact> {
+  // A repository workspace is not snapshotted: it is the caller-owned checkout,
+  // and serializing it would embed the whole repository in the outcome.
+  const snapshot =
+    request.workspace === undefined ? await sandbox.snapshot() : { version: 1 as const, files: [] };
   return {
     role: request.step.role,
-    snapshot: await sandbox.snapshot(),
+    snapshot,
     events,
     files: result?.files ?? files,
     sessionId: result?.sessionId ?? "",
@@ -191,17 +210,18 @@ export function createRunCellRoleExecutor(
   primitives: RunCellPrimitives = defaultPrimitives,
 ): (request: RoleExecutionRequest) => Promise<RoleExecutionResult> {
   return async (request) => {
-    const sandbox = await primitives.createSandbox();
+    const sandbox = await primitives.createSandbox(request.workspace);
     const { events, changedFiles, callbacks } = runEvents();
     let result: RunResult<unknown> | undefined;
+    const prompt = rolePrompt(request);
     try {
       const agent = primitives.createAgent({
         model: `${request.profile.provider}/${request.profile.model}`,
         credentials: request.credentials,
-        systemPrompt: rolePrompts[request.step.role],
+        systemPrompt: prompt,
       });
       result = await agent.run({
-        prompt: rolePrompts[request.step.role],
+        prompt,
         files: contextFiles(request),
         schema: roleSchema(request),
         sandbox,
@@ -209,6 +229,9 @@ export function createRunCellRoleExecutor(
         signal: request.signal,
       });
       const output = roleOutput(request.step.role, result.data);
+      if (process.env.DIFFOWL_DEBUG_PROVIDER === "1") {
+        console.error(`[diffowl] ${request.step.role} output ${JSON.stringify(output)}`);
+      }
       const artifact = await executionArtifact(request, sandbox, events, changedFiles, result);
       if (
         output.role === "reviewer" &&
@@ -221,7 +244,10 @@ export function createRunCellRoleExecutor(
         };
       }
       return { type: "completed", output, artifact };
-    } catch {
+    } catch (error) {
+      if (process.env.DIFFOWL_DEBUG_PROVIDER === "1") {
+        console.error(`[diffowl] ${request.step.role} role failed:`, error);
+      }
       return {
         type: "provider_failure",
         reason: `Provider execution failed for the ${request.step.role} role.`,

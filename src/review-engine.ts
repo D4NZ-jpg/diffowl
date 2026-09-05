@@ -28,6 +28,7 @@ import {
   type ReviewedPullRequest,
   type RoleExecutionArtifact,
   type RoleExecutor,
+  type RoleWorkspace,
   type VerificationAdapter,
   type VerificationContext,
   type SuppressedFinding,
@@ -78,6 +79,7 @@ export type {
   RoleExecutionRequest,
   RoleExecutionResult,
   RoleOutput,
+  RoleWorkspace,
   ValidationAttempt,
   ValidationExecutionRequest,
   VerificationAdapter,
@@ -198,6 +200,13 @@ export interface ReviewDependencies {
   findingDispositions?: Readonly<Record<string, FindingDispositionState>> | undefined;
   reassessedFingerprints?: readonly string[] | undefined;
   findingReassessmentContexts?: Readonly<Record<string, string>> | undefined;
+  /**
+   * A repository checkout at the reviewed head revision for roles to read.
+   * Forwarded only when the trust class permits privileged tools, because the
+   * checkout is untrusted pull-request code and the host sandbox provides no
+   * isolation of its own.
+   */
+  repositoryWorkspace?: RoleWorkspace | undefined;
   findingDiscussionEvents?: readonly FindingDiscussionEvent[] | undefined;
 }
 
@@ -582,6 +591,9 @@ export async function runReview(
         executionArtifacts,
         verification,
         dependencies.findingReassessmentContexts,
+        input.trust.capabilities.privilegedTools === "denied"
+          ? undefined
+          : dependencies.repositoryWorkspace,
       ),
     result.policy.limits.reviewTimeoutSeconds,
     controller,

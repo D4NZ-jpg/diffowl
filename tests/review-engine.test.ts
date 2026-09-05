@@ -713,6 +713,45 @@ describe("runReview role execution", () => {
     });
   });
 
+  it("forwards a repository workspace only when the trust class permits privileged tools", async () => {
+    const workspace = { rootDir: "/tmp/example-checkout" };
+    const seen: Array<{ rootDir: string } | undefined> = [];
+    const execute = async (request: RoleExecutionRequest) => {
+      seen.push(request.workspace);
+      return emptyRoleResult(request);
+    };
+
+    await runReview(representativePullRequest, {
+      credentialProfiles: { primary: { type: "env" } },
+      executeRole: execute,
+      repositoryWorkspace: workspace,
+    });
+    expect(seen).toEqual([undefined, undefined, undefined]);
+
+    seen.length = 0;
+    await runReview(
+      {
+        ...representativePullRequest,
+        trust: {
+          class: "local_cli",
+          capabilities: {
+            validationCommands: "local_user_authorized",
+            secrets: "local_user_authorized",
+            writeTokens: "local_user_authorized",
+            privilegedTools: "local_user_authorized",
+            publishing: "denied",
+          },
+        },
+      },
+      {
+        credentialProfiles: { primary: { type: "env" } },
+        executeRole: execute,
+        repositoryWorkspace: workspace,
+      },
+    );
+    expect(seen).toEqual([workspace, workspace, workspace]);
+  });
+
   it("reports partial coverage when trust restrictions deny configured validation", async () => {
     const outcome = await runReview(validationDeniedPullRequest(), {
       credentialProfiles: { primary: { type: "env" } },
