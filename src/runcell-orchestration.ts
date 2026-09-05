@@ -105,21 +105,46 @@ export interface RunCellRoleAgent {
 
 export interface RunCellPrimitives {
   createAgent(options: AgentOptions): RunCellRoleAgent;
-  createSandbox(): Promise<Sandbox>;
+  createSandbox(workspace?: RoleWorkspace): Promise<Sandbox>;
 }
+
+/**
+ * Context files are seeded under this directory so they never collide with
+ * repository paths when a role runs inside a repository workspace.
+ */
+export const WORKSPACE_CONTEXT_DIRECTORY = ".diffowl";
 
 const defaultPrimitives: RunCellPrimitives = {
   createAgent: (options) => createAgent(options) as RunCellRoleAgent,
-  createSandbox: () => createVirtualSandbox(),
+  createSandbox: (workspace) =>
+    workspace === undefined
+      ? createVirtualSandbox()
+      : createSandbox({
+          type: "host",
+          rootDir: workspace.rootDir,
+          isolation: "external",
+        }),
 };
+
+const workspacePromptSuffix =
+  " The working directory is the repository checkout at the reviewed head revision; pull-request context files are under .diffowl/. Read repository files to ground your assessment. Do not modify repository files. Do not run commands other than reading files, except the verifier, which may only run the validation commands listed in the policy.";
+
+const materialityRule =
+  " Materiality rule: a defect is material when the change as written can produce incorrect behavior, a crash, a security or data-integrity problem, or a feature that silently does not work (for example a flag or gate that can never enable, a stub that always errors, a branch that is unreachable, a value that is validated twice while another is never validated). Material does not depend on guessed author intent, on whether the defect might be fixed later, or on how many users hit it; if the code is wrong, it is material. Advisory is only for style, naming, clarity, documentation, and speculative or unverifiable concerns.";
 
 const rolePrompts: Record<ReviewRole, string> = {
   reviewer:
-    "Generate structured candidate material findings and separate non-blocking advisory suggestions. Cite only evidence available in the supplied pull-request context. For each candidate provide stable fingerprint context when known: claim kind, affected area, applicable policy or capability, and symbol/API/configuration/behavior location context. Never use line numbers or provider/thread identifiers as fingerprint context. A candidate may propose one contiguous Suggested patch replacement within its changed-line location; provide only startLine, endLine, and replacement. Never choose a file path, validation command, or proof.",
+    "Generate structured candidate material findings and separate non-blocking advisory suggestions." +
+    materialityRule +
+    " Every defect that meets the materiality rule must be a candidate finding, never an advisory suggestion, even if you expect it to be argued down later. Cite only evidence available in the supplied pull-request context. For each candidate provide stable fingerprint context when known: claim kind, affected area, applicable policy or capability, and symbol/API/configuration/behavior location context. Never use line numbers or provider/thread identifiers as fingerprint context. A candidate may propose one contiguous Suggested patch replacement within its changed-line location; provide only startLine, endLine, and replacement. Never choose a file path, validation command, or proof.",
   challenger:
-    "Challenge each candidate for false positives, weak evidence, and low materiality. Support, reject, or downgrade every candidate you can assess.",
+    "Challenge each candidate for false positives, weak evidence, and low materiality. Support, reject, or downgrade every candidate you can assess." +
+    materialityRule +
+    " Downgrade only when the candidate fails the materiality rule; do not downgrade a real defect because the author may have intended it or because a fix is easy.",
   verifier:
-    "Verify the surviving candidates using only the engine-generated evidence catalog and validation attempts. Model agreement is not verification. Disposition each candidate as material, advisory, suppress, or abstain when evidence is insufficient to judge; cite catalog evidence IDs and state explicit limitations.",
+    "Verify the surviving candidates using only the engine-generated evidence catalog and validation attempts. Model agreement is not verification. Disposition each candidate as material, advisory, suppress, or abstain when evidence is insufficient to judge; cite catalog evidence IDs and state explicit limitations." +
+    materialityRule +
+    " Your job is to decide whether the claimed defect is real and shown by the evidence, not whether the author meant it: a confirmed defect is material even when the surrounding change suggests the feature is being removed or disabled, and even when a separate defect in the same change would also break the feature. Use suppress for claims the evidence refutes, advisory for claims that are true but fail the materiality rule, and abstain only when the evidence cannot settle the claim. Do not use limitations about missing validation commands as a reason to move a statically confirmed defect out of material.",
 };
 
 function runEvents(): {
