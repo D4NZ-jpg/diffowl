@@ -46,15 +46,15 @@ if (outcome.type === "findings") {
 
 ## `PullRequestInput`
 
-| Field        | Type                  | Notes                                                       |
-| ------------ | --------------------- | ----------------------------------------------------------- |
-| `repository` | `string`              | `owner/name` form.                                          |
-| `number`     | `number`              | Pull-request number.                                        |
-| `baseSha`    | `string`              | Base revision.                                              |
-| `headSha`    | `string`              | Head revision under review.                                 |
-| `diff`       | `string`              | Unified diff.                                               |
+| Field        | Type                  | Notes                                                                          |
+| ------------ | --------------------- | ------------------------------------------------------------------------------ |
+| `repository` | `string`              | `owner/name` form.                                                             |
+| `number`     | `number`              | Pull-request number.                                                           |
+| `baseSha`    | `string`              | Base revision.                                                                 |
+| `headSha`    | `string`              | Head revision under review.                                                    |
+| `diff`       | `string`              | Unified diff.                                                                  |
 | `trust`      | `TrustClassification` | Produce with `classifyTrust`; never construct permissive capabilities by hand. |
-| `policy`     | `ProjectPolicyInput`  | `source` plus the raw file `contents`; the engine parses and validates. |
+| `policy`     | `ProjectPolicyInput`  | `source` plus the raw file `contents`; the engine parses and validates.        |
 
 ### Trust classification
 
@@ -76,16 +76,16 @@ Fork and Dependabot contexts get denied capabilities automatically; the engine t
 
 All dependencies are optional; defaults give you the standard RunCell-backed pipeline.
 
-| Field                 | Type                                        | Purpose                                                                    |
-| --------------------- | ------------------------------------------- | -------------------------------------------------------------------------- |
-| `credentialProfiles`  | `Record<string, DiffowlCredentials>`        | Resolves `credentialProfile` names from role profiles. See [Credentials](../../guides/credentials/). |
-| `executeRole`         | `RoleExecutor`                              | Replace provider execution entirely (tests, custom runtimes).              |
-| `verificationAdapter` | `VerificationAdapter`                       | Supply repository file reads and validation execution for your environment. |
-| `persistence`         | `ReviewPersistenceStore`                    | Durable ledger, run records, and artifacts.                                |
-| `runId`               | `string`                                    | Stable run identity; generated when omitted.                               |
-| `engineVersion`       | `string`                                    | Recorded in run records.                                                   |
-| `mergeBaseSha`        | `string`                                    | Merge-base context for the run record.                                     |
-| Discussion inputs     | fingerprints, dispositions, events          | Feed finding-command state into ledger reconciliation.                     |
+| Field                 | Type                                 | Purpose                                                                                              |
+| --------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `credentialProfiles`  | `Record<string, DiffowlCredentials>` | Resolves `credentialProfile` names from role profiles. See [Credentials](../../guides/credentials/). |
+| `executeRole`         | `RoleExecutor`                       | Replace provider execution entirely (tests, custom runtimes).                                        |
+| `verificationAdapter` | `VerificationAdapter`                | Supply repository file reads and validation execution for your environment.                          |
+| `persistence`         | `ReviewPersistenceStore`             | Durable ledger, run records, and artifacts.                                                          |
+| `runId`               | `string`                             | Stable run identity; generated when omitted.                                                         |
+| `engineVersion`       | `string`                             | Recorded in run records.                                                                             |
+| `mergeBaseSha`        | `string`                             | Merge-base context for the run record.                                                               |
+| Discussion inputs     | fingerprints, dispositions, events   | Feed finding-command state into ledger reconciliation.                                               |
 
 ### Persistence
 
@@ -105,12 +105,15 @@ The `VerificationAdapter` interface is the engine's window into the repository a
 
 ```ts
 interface VerificationAdapter {
-  readRepositoryFile(request: RepositoryEvidenceRequest):
-    Promise<{ content: string; truncated: boolean } | undefined>;
-  executeValidation(request: ValidationExecutionRequest):
-    Promise<Omit<ValidationAttempt, "commandIndex" | "argv" | "timeoutSeconds">>;
-  validateSuggestedPatch?(request: SuggestedPatchValidationRequest):
-    Promise<SuggestedPatchValidationResult>;
+  readRepositoryFile(
+    request: RepositoryEvidenceRequest,
+  ): Promise<{ content: string; truncated: boolean } | undefined>;
+  executeValidation(
+    request: ValidationExecutionRequest,
+  ): Promise<Omit<ValidationAttempt, "commandIndex" | "argv" | "timeoutSeconds">>;
+  validateSuggestedPatch?(
+    request: SuggestedPatchValidationRequest,
+  ): Promise<SuggestedPatchValidationResult>;
 }
 ```
 
@@ -148,11 +151,7 @@ Serialize the full outcome if you archive results; `run.outcome` inside run meta
 The entry point also exports the evaluation and release-gate helpers:
 
 ```ts
-import {
-  evaluateSyntheticCorpus,
-  createV1ReleaseReportCard,
-  evaluateV1ReleaseGate,
-} from "diffowl";
+import { evaluateSyntheticCorpus, createV1ReleaseReportCard, evaluateV1ReleaseGate } from "diffowl";
 ```
 
 A synthetic corpus pairs material-finding cases with clean controls and expected typed outcomes. `evaluateSyntheticCorpus` produces per-case reports; the release-gate helpers aggregate them into a report card with required evidence and threat-test ids. See [`examples/synthetic-evaluation-corpus.json`](https://github.com/D4NZ-jpg/diffowl/blob/main/examples/synthetic-evaluation-corpus.json) for the corpus shape.

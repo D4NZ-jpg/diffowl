@@ -9,7 +9,11 @@ Diffowl is bring-your-own-key. Role profiles in `.diffowl.json` name a provider,
 {
   "roleProfiles": {
     "reviewer": { "provider": "openai", "model": "gpt-5", "credentialProfile": "default" },
-    "challenger": { "provider": "anthropic", "model": "claude-sonnet-4-6", "credentialProfile": "default" },
+    "challenger": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "credentialProfile": "default"
+    },
     "verifier": { "provider": "openai", "model": "gpt-5-mini", "credentialProfile": "default" }
   }
 }
@@ -52,11 +56,11 @@ const credentialProfiles: Record<string, DiffowlCredentials> = {
 
 Credential values are one of:
 
-| Value                                   | Meaning                                                        |
-| --------------------------------------- | -------------------------------------------------------------- |
-| `"local"` or `{ type: "local" }`        | Local RunCell credential resolution (developer machines).      |
-| `{ type: "env" }`                       | Resolve from process environment variables.                    |
-| `{ type: "agentDir", path }`            | Resolve from a RunCell agent directory on disk.                |
+| Value                            | Meaning                                                   |
+| -------------------------------- | --------------------------------------------------------- |
+| `"local"` or `{ type: "local" }` | Local RunCell credential resolution (developer machines). |
+| `{ type: "env" }`                | Resolve from process environment variables.               |
+| `{ type: "agentDir", path }`     | Resolve from a RunCell agent directory on disk.           |
 
 See [Embedding the engine](../../integration/library/) for the full options object.
 
@@ -64,13 +68,13 @@ See [Embedding the engine](../../integration/library/) for the full options obje
 
 Credential access is gated by trust classification before any risky work starts:
 
-| Trust class                     | Secrets                       | Validation commands       | Publishing            |
-| ------------------------------- | ----------------------------- | ------------------------- | --------------------- |
-| `trusted_same_repo_pull_request`| provider credentials only     | sandboxed                 | denied (engine side)  |
-| `untrusted_pull_request`        | denied                        | denied                    | denied                |
-| `local_cli`                     | local user authorized         | local user authorized     | denied                |
-| `privileged_publisher`          | publisher token only          | denied                    | SHA-bound, data only  |
-| `unsafe_or_unsupported`         | denied                        | denied                    | denied                |
+| Trust class                      | Secrets                   | Validation commands   | Publishing           |
+| -------------------------------- | ------------------------- | --------------------- | -------------------- |
+| `trusted_same_repo_pull_request` | provider credentials only | sandboxed             | denied (engine side) |
+| `untrusted_pull_request`         | denied                    | denied                | denied               |
+| `local_cli`                      | local user authorized     | local user authorized | denied               |
+| `privileged_publisher`           | publisher token only      | denied                | SHA-bound, data only |
+| `unsafe_or_unsupported`          | denied                    | denied                | denied               |
 
 Fork and Dependabot pull requests never see provider secrets, write tokens, or privileged tools. Keep provider secrets out of any workflow that can be triggered by untrusted content; the [trusted request router](../durable-state/#the-trusted-request-router) exists exactly for this.
 

@@ -165,7 +165,9 @@ h4 {
   font-size: 0.9375rem;
   font-weight: 700;
   letter-spacing: -0.01em;
-  transition: transform 120ms ease, background-color 120ms ease;
+  transition:
+    transform 120ms ease,
+    background-color 120ms ease;
 }
 
 .sl-link-button.primary {
@@ -406,8 +408,12 @@ h4 {
   margin: 0;
 }
 
-:root[data-theme="light"] .invert-dark { filter: none; }
-:root:not([data-theme="light"]) .invert-dark { filter: invert(0.88); }
+:root[data-theme="light"] .invert-dark {
+  filter: none;
+}
+:root:not([data-theme="light"]) .invert-dark {
+  filter: invert(0.88);
+}
 
 /* Integrations band: sits directly under the hero's ink hairline. */
 .sl-markdown-content .works {
@@ -790,12 +796,22 @@ h4 {
   text-decoration: none;
 }
 
-.theme-swap-light { display: none; }
-.theme-swap-dark { display: block; }
-:root[data-theme="light"] .theme-swap-light { display: block; }
-:root[data-theme="light"] .theme-swap-dark { display: none; }
+.theme-swap-light {
+  display: none;
+}
+.theme-swap-dark {
+  display: block;
+}
+:root[data-theme="light"] .theme-swap-light {
+  display: block;
+}
+:root[data-theme="light"] .theme-swap-dark {
+  display: none;
+}
 .review-boundary .theme-swap-light,
-.review-boundary .theme-swap-dark { margin-inline: auto; }
+.review-boundary .theme-swap-dark {
+  margin-inline: auto;
+}
 
 /* ---------- Preferences & mobile ---------- */
 

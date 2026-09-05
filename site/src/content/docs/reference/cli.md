@@ -36,11 +36,11 @@ Unknown arguments and missing option values print usage on stderr and exit with 
 
 ## Exit codes
 
-| Code | Meaning                                                                             |
-| ---- | ----------------------------------------------------------------------------------- |
+| Code | Meaning                                                                                             |
+| ---- | --------------------------------------------------------------------------------------------------- |
 | 0    | The engine produced a typed outcome. This includes non-clean outcomes like `findings` or `timeout`. |
-| 1    | The review threw: unreadable files, invalid policy JSON path, or an engine error.   |
-| 2    | Argument errors or pull-request input that does not match the required schema.      |
+| 1    | The review threw: unreadable files, invalid policy JSON path, or an engine error.                   |
+| 2    | Argument errors or pull-request input that does not match the required schema.                      |
 
 The exit code reflects whether a typed outcome was produced, not whether the review was clean. Read `outcome.type` from the report to branch on the result.
 
@@ -99,31 +99,31 @@ The CLI writes one JSON document to stdout:
 }
 ```
 
-| Field                 | Present            | Meaning                                                                      |
-| --------------------- | ------------------ | ---------------------------------------------------------------------------- |
-| `adapter`             | always             | Always `local_cli`.                                                          |
-| `mode`                | always             | `dry-run` or `publish`.                                                      |
-| `ciTrusted`           | always             | Always `false`.                                                              |
-| `trust`               | always             | The `local_cli` trust classification and its capability set.                 |
-| `publishing`          | always             | Always `not_attempted`; `requested` records whether `--publish` was passed.  |
-| `outcome`             | always             | The complete typed [review outcome](../outcomes/).                           |
-| `findings`            | always             | Material findings from the outcome, or `[]`.                                 |
-| `advisorySuggestions` | always             | Advisory suggestions from the outcome, or `[]`.                              |
-| `verification`        | always             | Evidence catalog, validation attempts, limitations, and coverage gaps.       |
-| `runRecord`           | with state dir     | The persisted versioned run record for this run.                             |
-| `ledger`              | with state dir     | The reconciled finding ledger after this run.                                |
-| `diagnostics`         | always             | Outcome type, reason, timeout seconds, attempt and artifact counts.          |
+| Field                 | Present        | Meaning                                                                     |
+| --------------------- | -------------- | --------------------------------------------------------------------------- |
+| `adapter`             | always         | Always `local_cli`.                                                         |
+| `mode`                | always         | `dry-run` or `publish`.                                                     |
+| `ciTrusted`           | always         | Always `false`.                                                             |
+| `trust`               | always         | The `local_cli` trust classification and its capability set.                |
+| `publishing`          | always         | Always `not_attempted`; `requested` records whether `--publish` was passed. |
+| `outcome`             | always         | The complete typed [review outcome](../outcomes/).                          |
+| `findings`            | always         | Material findings from the outcome, or `[]`.                                |
+| `advisorySuggestions` | always         | Advisory suggestions from the outcome, or `[]`.                             |
+| `verification`        | always         | Evidence catalog, validation attempts, limitations, and coverage gaps.      |
+| `runRecord`           | with state dir | The persisted versioned run record for this run.                            |
+| `ledger`              | with state dir | The reconciled finding ledger after this run.                               |
+| `diagnostics`         | always         | Outcome type, reason, timeout seconds, attempt and artifact counts.         |
 
 ### `diagnostics`
 
-| Field                    | Present                | Meaning                                              |
-| ------------------------ | ---------------------- | ---------------------------------------------------- |
-| `outcomeType`            | always                 | Mirror of `outcome.type` for quick filtering.        |
-| `reason`                 | outcomes with a reason | The typed outcome's reason string.                   |
-| `timeoutSeconds`         | `timeout` outcomes     | The exceeded hard timeout.                           |
-| `validationAttemptCount` | always                 | Number of validation command attempts executed.      |
-| `providerArtifactCount`  | always                 | Number of role execution artifacts captured.         |
-| `ledgerEntryCount`       | with state dir         | Entries in the persisted finding ledger.             |
+| Field                    | Present                | Meaning                                         |
+| ------------------------ | ---------------------- | ----------------------------------------------- |
+| `outcomeType`            | always                 | Mirror of `outcome.type` for quick filtering.   |
+| `reason`                 | outcomes with a reason | The typed outcome's reason string.              |
+| `timeoutSeconds`         | `timeout` outcomes     | The exceeded hard timeout.                      |
+| `validationAttemptCount` | always                 | Number of validation command attempts executed. |
+| `providerArtifactCount`  | always                 | Number of role execution artifacts captured.    |
+| `ledgerEntryCount`       | with state dir         | Entries in the persisted finding ledger.        |
 
 Useful one-liners:
 

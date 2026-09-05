@@ -91,11 +91,11 @@ The dispatched review workflow receives `repository`, `pull-request-number`, `ba
 
 ## What state contains
 
-| Artifact             | Contents                                                                                    |
-| -------------------- | ------------------------------------------------------------------------------------------- |
-| Finding ledger       | Fingerprints, lifecycle states, and disposition history per pull request.                   |
-| Run records          | PR and head SHA, trust class, policy hash, engine version, budget envelope, typed outcome.  |
-| Execution artifacts  | RunCell session snapshots, events, and files per role execution.                            |
-| Publication receipts | Adapter-owned confirmations for reviews, checks, and summaries.                             |
+| Artifact             | Contents                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------ |
+| Finding ledger       | Fingerprints, lifecycle states, and disposition history per pull request.                  |
+| Run records          | PR and head SHA, trust class, policy hash, engine version, budget envelope, typed outcome. |
+| Execution artifacts  | RunCell session snapshots, events, and files per role execution.                           |
+| Publication receipts | Adapter-owned confirmations for reviews, checks, and summaries.                            |
 
 Run records are versioned; safe metadata (never secrets) is exposed through the Action's `run-metadata` output.

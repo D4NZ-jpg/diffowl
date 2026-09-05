@@ -13,3 +13,4 @@ site/dist/
 .env
 .env.*
 !.env.example
+.playwright-mcp/

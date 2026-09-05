@@ -9,6 +9,8 @@
     "docs/**",
     "research/**",
     "AGENTS.md",
-    "CONTEXT.md"
+    "CONTEXT.md",
+    "site/mockups/**",
+    ".playwright-mcp/**"
   ]
 }

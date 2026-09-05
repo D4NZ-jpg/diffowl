@@ -9,15 +9,15 @@ Every non-clean outcome is typed, carries a reason, and preserves the evidence t
 
 The Action's `outcome` output and the workflow summary both carry the typed outcome. Branch on `type`:
 
-| You see                 | Start here                                                                          |
-| ----------------------- | ----------------------------------------------------------------------------------- |
-| `configuration_failure` | Read `reason`. It names the exact policy field, missing credential profile, or setup problem. |
-| `timeout`               | `timeoutSeconds` is the exceeded budget. Reduce scope or raise `limits.reviewTimeoutSeconds`. |
-| `budget_limit` / `resource_limit` | Read `reason`; check provider-side limits and validation output sizes.    |
-| `provider_failure`      | Read `reason`; check credentials, model names, and provider status.                 |
-| `partial_coverage`      | Read `reason` plus `verification.coverageGaps`; often an untrusted-context restriction. |
-| `abstention`            | Read `reason` plus `verification.limitations`; the engine refused to fake confidence. |
-| `internal_failure`      | File an issue with the reason string and run metadata.                              |
+| You see                           | Start here                                                                                    |
+| --------------------------------- | --------------------------------------------------------------------------------------------- |
+| `configuration_failure`           | Read `reason`. It names the exact policy field, missing credential profile, or setup problem. |
+| `timeout`                         | `timeoutSeconds` is the exceeded budget. Reduce scope or raise `limits.reviewTimeoutSeconds`. |
+| `budget_limit` / `resource_limit` | Read `reason`; check provider-side limits and validation output sizes.                        |
+| `provider_failure`                | Read `reason`; check credentials, model names, and provider status.                           |
+| `partial_coverage`                | Read `reason` plus `verification.coverageGaps`; often an untrusted-context restriction.       |
+| `abstention`                      | Read `reason` plus `verification.limitations`; the engine refused to fake confidence.         |
+| `internal_failure`                | File an issue with the reason string and run metadata.                                        |
 
 From a workflow step, extract it directly:
 
@@ -72,14 +72,14 @@ A `provider_failure` with zero artifacts means the failure happened before the r
 
 ## 5. Common failures
 
-| Symptom                                                          | Likely cause and fix                                                                          |
-| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `Credential profile "default" required by reviewer role is missing.` | The workflow does not export the provider variables the profile needs. See [Credentials](../credentials/). |
-| `Project policy ... unsupported field ...`                       | Policy fields are closed. Remove the field; check for typos.                                  |
-| `configuration_failure` mentioning state refs or markers         | Durable Git state was partially deleted or rewritten. Restore both refs together. See [Durable state](../durable-state/). |
-| Every run is `policy_skip`                                       | `scope.includePaths` does not match the changed paths, or exclusions remove everything.       |
-| Findings disappear and return between pushes                     | State directory or state refs are not durable between runs, so the ledger cannot reconcile.   |
-| `partial_coverage` on fork PRs                                   | Expected. Untrusted contexts deny secrets and validation commands by design.                  |
+| Symptom                                                              | Likely cause and fix                                                                                                      |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `Credential profile "default" required by reviewer role is missing.` | The workflow does not export the provider variables the profile needs. See [Credentials](../credentials/).                |
+| `Project policy ... unsupported field ...`                           | Policy fields are closed. Remove the field; check for typos.                                                              |
+| `configuration_failure` mentioning state refs or markers             | Durable Git state was partially deleted or rewritten. Restore both refs together. See [Durable state](../durable-state/). |
+| Every run is `policy_skip`                                           | `scope.includePaths` does not match the changed paths, or exclusions remove everything.                                   |
+| Findings disappear and return between pushes                         | State directory or state refs are not durable between runs, so the ledger cannot reconcile.                               |
+| `partial_coverage` on fork PRs                                       | Expected. Untrusted contexts deny secrets and validation commands by design.                                              |
 
 ## 6. When filing an issue
 
