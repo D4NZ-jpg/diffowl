@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "scope": {
+    "includePaths": ["**"],
+    "excludePaths": []
+  },
+  "limits": {
+    "reviewTimeoutSeconds": 1500,
+    "maxFindings": 25
+  },
+  "verification": {
+    "validationCommands": []
+  },
+  "reviewRequests": {
+    "cooldownSeconds": 60
+  },
+  "roleProfiles": {
+    "reviewer": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "credentialProfile": "default"
+    },
+    "challenger": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "credentialProfile": "default"
+    },
+    "verifier": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "credentialProfile": "default"
+    }
+  }
+}

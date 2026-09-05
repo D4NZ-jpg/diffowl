@@ -1,0 +1,610 @@
+{
+  "judge": "gpt-5.6-sol",
+  "prs": [
+    {
+      "url": "https://github.com/keycloak/keycloak/pull/37634",
+      "outcome": "findings",
+      "elapsed_seconds": 171.554,
+      "tp": 2,
+      "fp": 5,
+      "fn": 2,
+      "material_true_positives": [
+        {
+          "golden": "In AccessTokenContext constructor, the fourth Objects.requireNonNull validates grantType twice instead of validating rawTokenId, allowing null rawTokenId values to pass validation.",
+          "severity": "Critical",
+          "candidate": "AccessTokenContext constructor checks grantType twice and never validates rawTokenId, allowing null rawTokenId values to fail later or produce token IDs ending in ':null'",
+          "path": "services/src/main/java/org/keycloak/protocol/oidc/encode/AccessTokenContext.java",
+          "line": 73
+        },
+        {
+          "golden": "In isAccessTokenId, the substring for the grant shortcut and the equality check look inverted: the grant shortcut occupies indices 4\u20135 (substring(4,6)), and a match should return true (combined with UUID check), not false.",
+          "severity": "High",
+          "candidate": "AssertEvents.isAccessTokenId inverts the shortcut comparison, returning false when the actual shortcut matches the expected value and making token ID grant-type assertions ineffective",
+          "path": "testsuite/integration-arquillian/tests/base/src/test/java/org/keycloak/testsuite/AssertEvents.java",
+          "line": 483
+        }
+      ],
+      "demoted_critical_high": [],
+      "missed_critical_high": [],
+      "false_positives": [
+        "Constants.java may fail to compile because the new GRANT_TYPE constant references OAuth2Constants without an import or other visible resolution",
+        "Adding abstract getShortcut() to the public OAuth2GrantTypeFactory SPI breaks third-party implementations that do not implement the new method",
+        "Removing the OAuth2GrantType.Context copy constructor breaks extensions that rely on Context(Context)",
+        "Lazy registration in getShortcutByGrantType/getGrantTypeByShortcut bypasses duplicate-shortcut validation and can silently remap a shortcut to the wrong grant type",
+        "getTokenContextFromTokenId throws IllegalArgumentException for token IDs with a colon and a non-6-character prefix instead of falling back to an UNKNOWN context for legacy or external IDs"
+      ]
+    },
+    {
+      "url": "https://github.com/keycloak/keycloak/pull/36880",
+      "outcome": "clean",
+      "elapsed_seconds": 315.283,
+      "tp": 4,
+      "fp": 8,
+      "fn": 1,
+      "material_true_positives": [],
+      "demoted_critical_high": [
+        {
+          "golden": "Inconsistent feature flag bug causing orphaned permissions. The AdminPermissions event listener, responsible for cleaning up permissions upon role, client, or group removal, is incorrectly guarded by the ADMIN_FINE_GRAINED_AUTHZ (V1) feature flag. This is inconsistent with other methods in the class that use ADMIN_FINE_GRAINED_AUTHZ_V2. Consequently, if ADMIN_FINE_GRAINED_AUTHZ_V2 is enabled but V1 is not, the permission cleanup logic will not execute, leading to orphaned permission data. Cleanup should occur regardless of which fine-grained authorization version is enabled.",
+          "severity": "High",
+          "candidate": "Removal-event cleanup is gated only by the V1 ADMIN_FINE_GRAINED_AUTHZ feature flag, leaving V2-only deployments without cleanup of stale permission resources when roles, clients, or groups are removed",
+          "path": "services/src/main/java/org/keycloak/services/resources/admin/permissions/AdminPermissions.java",
+          "line": 96
+        },
+        {
+          "golden": "In getClientsWithPermission(String scope), iterating resourceStore.findByType(server, AdminPermissionsSchema.CLIENTS_RESOURCE_TYPE) and returning resource.getName() will only ever consider the type-level 'Clients' resource (per-client resources have no type) and return its name, while AvailableRoleMappingResource#getRoleIdsWithPermissions expects actual client IDs to pass to realm.getClientById, which can lead to incorrect behavior or a null client and subsequent failures.",
+          "severity": "High",
+          "candidate": "getClientsWithPermission can include the resource-type-wide resource name \"Clients\" in a set expected to contain only client IDs",
+          "path": "services/src/main/java/org/keycloak/services/resources/admin/permissions/ClientPermissionsV2.java",
+          "line": 217
+        },
+        {
+          "golden": "In ClientPermissionsV2.hasPermission, the method getResourceTypeResource could return null, leading to a NullPointerException in findByResource. Defensive null checks are needed to prevent this issue.",
+          "severity": "High",
+          "candidate": "ClientPermissionsV2.hasPermission(ClientModel, String) does not null-check the fallback resource-type resource before passing it to policyStore.findByResource, risking an NPE when the schema resource is missing",
+          "path": "services/src/main/java/org/keycloak/services/resources/admin/permissions/ClientPermissionsV2.java",
+          "line": 217
+        }
+      ],
+      "missed_critical_high": [
+        {
+          "golden_comment": "In hasPermission(ClientModel client, String scope), the resource lookup uses findByName(server, client.getId(), server.getId()), but AdminPermissionsSchema.getOrCreateResource creates per-client resources with the owner set to resourceServer.getClientId(), so this lookup will never find those resources and will always fall back to the 'all-clients' resource, effectively ignoring client-specific permissions.",
+          "severity": "High",
+          "category": "bug"
+        }
+      ],
+      "false_positives": [
+        "ClientPermissionsV2 has an unused static import for AdminPermissionManagement.TOKEN_EXCHANGE",
+        "ClientPermissionsV2 declares an unused static Logger field",
+        "ClientPermissionEvaluator.requireView() Javadoc incorrectly describes returning true even though the method is void and throws ForbiddenException on failure",
+        "ClientPermissionEvaluator.requireViewClientScopes() Javadoc incorrectly describes returning true even though the method is void and throws ForbiddenException on failure",
+        "ClientPermissionEvaluator.canList() Javadoc may incorrectly cite AdminRoles.QUERY_USERS for client-listing permissions",
+        "ClientPermissionsV2 duplicates the permission-evaluation and scope-matching loop across hasPermission(ClientModel, String), hasPermission(String), and hasGrantedPermission, increasing drift risk",
+        "The scope-matching loops unnecessarily construct Arrays.asList(scope) for a single scope instead of comparing scope directly",
+        "AdminPermissionsSchema contains trailing whitespace on the blank line after the class declaration"
+      ]
+    },
+    {
+      "url": "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/5",
+      "outcome": "abstention",
+      "elapsed_seconds": 477.624,
+      "tp": 4,
+      "fp": 7,
+      "fn": 2,
+      "material_true_positives": [],
+      "demoted_critical_high": [
+        {
+          "golden": "Validation logic incorrectly uses .get('timestamp'), which treats a timestamp of 0 as absent. It should directly check 'timestamp' in self.initial_data to ensure proper field presence detection, preventing both 'age=0' and 'timestamp' from passing mutual-exclusion validation.",
+          "severity": "High",
+          "candidate": "BrowserReportSerializer uses truthiness for age/timestamp mutual exclusion, allowing reports with both fields when either value is 0",
+          "path": null,
+          "line": null
+        }
+      ],
+      "missed_critical_high": [],
+      "false_positives": [
+        "HIDDEN_ATTRIBUTES is only filtered in the search-query branch, so hidden attributes remain visible in the default no-search view",
+        "The browser report collector rejects the entire batch with 422 when one report is invalid, dropping otherwise valid reports",
+        "Migrating useTraceItemAttributeKeys to useQuery omits retry: false and refetchOnWindowFocus: false, silently introducing retries and window-focus refetches for an expensive endpoint",
+        "get_merged_pr_single_issue_template hard-codes PRCommentWorkflow._truncate_title inside a staticmethod, bypassing subclass overrides and making inheritance or refactoring brittle",
+        "get_environment_info catches all Exceptions and only logs at info level, potentially hiding regressions while silently omitting environment information",
+        "The Times component applies responsive hiding to the inner TimeSince instead of the TextOverflow wrapper, leaving stray wrapper spacing on small screens",
+        "BrowserReportSerializer does not require either age or timestamp, allowing reports with neither field despite the exactly-one invariant"
+      ]
+    },
+    {
+      "url": "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/2",
+      "outcome": "findings",
+      "elapsed_seconds": 231.884,
+      "tp": 4,
+      "fp": 9,
+      "fn": 0,
+      "material_true_positives": [],
+      "demoted_critical_high": [
+        {
+          "golden": "OptimizedCursorPaginator's negative-offset branch in get_result() passes cursor.offset directly as start_offset to queryset slicing when enable_advanced_features is True and cursor.offset < 0.",
+          "severity": "Critical",
+          "candidate": "OptimizedCursorPaginator slices sources using user-controlled negative offsets; Django querysets raise ValueError, while list-like sources can wrap around and expose rows outside normal pagination bounds",
+          "path": null,
+          "line": null
+        },
+        {
+          "golden": "In BasePaginator.get_result(), when cursor.is_prev is True, it sets start_offset = offset without clamping, allowing negative offset values to be passed to queryset slicing.",
+          "severity": "High",
+          "candidate": "BasePaginator.get_result falsely claims the underlying queryset handles negative boundary conditions for previous cursors, even though Django querysets reject negative slicing",
+          "path": null,
+          "line": null
+        },
+        {
+          "golden": "OptimizedCursorPaginator.get_item_key uses floor/ceil on a datetime key (order_by='-datetime'), causing TypeError.",
+          "severity": "High",
+          "candidate": "OptimizedCursorPaginator.get_item_key applies math.floor/math.ceil directly to datetime values, causing TypeError for its audit-log ordering",
+          "path": null,
+          "line": null
+        },
+        {
+          "golden": "Accessing .has_global_access on organization_context.member can raise an AttributeError when organization_context is None, particularly for non-superuser non-member users.",
+          "severity": "High",
+          "candidate": "Audit-log endpoint unconditionally dereferences organization_context.member, causing an AttributeError and HTTP 500 when member is None",
+          "path": null,
+          "line": null
+        }
+      ],
+      "missed_critical_high": [],
+      "false_positives": [
+        "Audit-log endpoint exposes a hidden optimized_pagination query parameter that changes pagination semantics on a sensitive endpoint and enables advanced negative-offset behavior",
+        "OptimizedCursorPaginator.value_from_cursor returns a raw integer that is compared against a datetime column, making cursor filtering incompatible with its audit-log call site",
+        "add-buffer.lua hardcodes a 1000-span cap and drops the oldest spans, ignoring the existing max_segment_spans configuration",
+        "Removal of the max_segment_spans guard, metric, and error log makes oversized-segment span loss silent and removes observability",
+        "Reducing the redirect-resolution loop limit from 10000 to 1000 can cause shallower segment trees to be joined incorrectly",
+        "The redirect-resolution depth-limit explanation was removed, leaving the new hardcoded 1000 limit undocumented instead of using an explanatory comment or named constant",
+        "Cursor.__init__ misleadingly describes negative offsets as a supported advanced feature even though cursor parsing provides no validation or clamping and downstream Django querysets reject them",
+        "process_batch directly accesses val[\"end_timestamp_precise\"], causing KeyError for messages from older or in-flight producers that omit the field",
+        "Trailing whitespace in the audit-logs endpoint may fail lint or formatting checks and adds diff noise"
+      ]
+    },
+    {
+      "url": "https://github.com/getsentry/sentry/pull/67876",
+      "outcome": "clean",
+      "elapsed_seconds": 239.968,
+      "tp": 1,
+      "fp": 9,
+      "fn": 2,
+      "material_true_positives": [],
+      "demoted_critical_high": [
+        {
+          "golden": "The code attempts to access integration.metadata[sender][login] without checking for the existence of the sender key. This causes a KeyError for integrations where the sender metadata was not set during creation",
+          "severity": "High",
+          "candidate": "GitHubInstallation.dispatch accesses integration.metadata[\"sender\"][\"login\"] without guarding against missing keys, which can cause a 500 response",
+          "path": "src/sentry/integrations/github/integration.py",
+          "line": 505
+        }
+      ],
+      "missed_critical_high": [],
+      "false_positives": [
+        "OAuth authorize redirect parameters are interpolated into the URL without percent-encoding, so reserved characters or query components in redirect_uri can break parsing",
+        "OAuth state token is compared using ordinary string equality instead of a constant-time comparison",
+        "GitHubInstallation.dispatch advances the pipeline when Integration.DoesNotExist without verifying the OAuth-authenticated GitHub user against the installer, creating a race window before the installation webhook creates the Integration",
+        "The module-level error helper has an overly generic name and lacks type annotations for its request and org parameters",
+        "GitHubInstallation.dispatch performs duplicate Integration lookups for the same installation_id instead of fetching once and reusing the result",
+        "Several tests overwrite the init request response before asserting it, leaving the intermediate OAuth redirect behavior unverified",
+        "Multiple tests hard-code the pipeline signature/state value, coupling them to the current deterministic signature implementation",
+        "Integration lookups by external_id are not scoped by provider, allowing cross-provider ID collisions to cause MultipleObjectsReturned or select the wrong integration",
+        "The OAuth token-exchange safe_urlopen call is outside the try/except, so network or HTTP failures may escape as unhandled exceptions instead of rendering the installation error page"
+      ]
+    },
+    {
+      "url": "https://github.com/keycloak/keycloak/pull/32918",
+      "outcome": "abstention",
+      "elapsed_seconds": 324.818,
+      "tp": 1,
+      "fp": 4,
+      "fn": 1,
+      "material_true_positives": [],
+      "demoted_critical_high": [],
+      "missed_critical_high": [
+        {
+          "golden_comment": "InfinispanIdentityProviderStorageProvider.getForLogin() recursively calls session.identityProviders().getById() instead of idpDelegate.getById(), causing the cache lookup to re-enter the same caching layer.",
+          "severity": "Critical",
+          "category": "bug"
+        }
+      ],
+      "false_positives": [
+        "getForLogin returns unwrapped IdentityProviderModel instances on cache hits, causing organization-aware behavior such as isEnabled to differ from cache-miss or bypass paths",
+        "remove(String alias) unconditionally calls idpDelegate.getByAlias(alias) even when the IDP is cached, adding an unnecessary store round-trip on every cached removal",
+        "remove(String alias) relies implicitly on getLoginPredicate filtering null when the alias is not found, without documenting or explicitly handling the null case",
+        "Login-cache invalidation clears caches for every FetchMode on qualifying changes, unnecessarily evicting unaffected modes and reducing cache effectiveness"
+      ]
+    },
+    {
+      "url": "https://github.com/grafana/grafana/pull/94942",
+      "outcome": "clean",
+      "elapsed_seconds": 130.938,
+      "tp": 2,
+      "fp": 5,
+      "fn": 0,
+      "material_true_positives": [],
+      "demoted_critical_high": [
+        {
+          "golden": "The enableSqlExpressions function has flawed logic that always returns false, effectively disabling SQL expressions unconditionally:",
+          "severity": "Critical",
+          "candidate": "enableSqlExpressions contains dead or convoluted flag-checking logic because it returns false on every branch",
+          "path": "pkg/expr/reader.go",
+          "line": 132
+        },
+        {
+          "golden": "The DB methods NewInMemoryDB().RunCommands, DB.QueryFramesInto, and DB.TablesList in pkg/expr/sql/db.go return hardcoded 'not implemented' errors after removing the go-duck dependency.",
+          "severity": "High",
+          "candidate": "Legacy callers such as SQLCommand.Execute and TablesList can reach the stub engine and fail at runtime with an opaque \"not implemented\" error instead of being consistently gated or removed",
+          "path": "pkg/expr/sql/db.go",
+          "line": 23
+        }
+      ],
+      "missed_critical_high": [],
+      "false_positives": [
+        "The QueryTypeSQL gate reports \"sqlExpressions is not implemented\" when the feature flag is disabled, giving users misleading troubleshooting guidance",
+        "ReadQuery uses an unnecessary temporary variable before checking enableSqlExpressions(h)",
+        "Stub sql.DB methods create ad-hoc errors instead of returning exported sentinel errors, preventing callers and tests from reliably using errors.Is",
+        "The empty DB type is declared with a non-idiomatic multiline empty struct instead of \"type DB struct{}\"",
+        "The stub DB type lacks a doc comment explaining that it intentionally replaces the removed go-duck engine"
+      ]
+    },
+    {
+      "url": "https://github.com/grafana/grafana/pull/79265",
+      "outcome": "clean",
+      "elapsed_seconds": 176.655,
+      "tp": 2,
+      "fp": 9,
+      "fn": 3,
+      "material_true_positives": [],
+      "demoted_critical_high": [
+        {
+          "golden": "Race condition: Multiple concurrent requests could pass the device count check simultaneously and create devices beyond the limit. Consider using a database transaction or lock.",
+          "severity": "High",
+          "candidate": "CreateOrUpdateDevice uses a non-transactional check-then-insert sequence, allowing concurrent requests to exceed the configured anonymous device limit",
+          "path": "pkg/services/anonymous/anonimpl/anonstore/database.go",
+          "line": 118
+        }
+      ],
+      "missed_critical_high": [
+        {
+          "golden_comment": "The `tagDeviceUI` function populates the local cache with the device ID before the `CreateOrUpdateDevice` call. If `ErrDeviceLimitReached` is returned, the cache entry remains set, allowing subsequent requests to bypass the device limit until the cache expires after 29 minutes.",
+          "severity": "High",
+          "category": "bug"
+        }
+      ],
+      "false_positives": [
+        "TagDevice now performs a synchronous blocking database write on every anonymous authentication request, adding database latency to the authentication hot path",
+        "TagDevice is no longer bounded by the previous short timeout and instead can block for the full request-context lifetime",
+        "TagDevice no longer has panic recovery on the authentication path",
+        "Non-limit TagDevice failures are only logged and otherwise ignored during authentication, which may hide tagging failures",
+        "GrafanaBootConfig infers anonymousDeviceLimit as the literal type undefined because the field lacks an explicit number | undefined annotation",
+        "The frontend treats anonymousDeviceLimit as potentially undefined even though the backend always serializes an int64 value, conflating an unset value with 0 meaning unlimited",
+        "anonymousDeviceExpiration is duplicated across database.go and api.go, allowing the device-window policy values to drift apart",
+        "There is no test verifying that an already-counted device can still be updated after the anonymous device limit has been reached",
+        "There is no test covering configuration plumbing for auth.anonymous device_limit"
+      ]
+    },
+    {
+      "url": "https://github.com/grafana/grafana/pull/76186",
+      "outcome": "clean",
+      "elapsed_seconds": 152.945,
+      "tp": 2,
+      "fp": 4,
+      "fn": 1,
+      "material_true_positives": [],
+      "demoted_critical_high": [
+        {
+          "golden": "The `TestLogger.FromContext` method returns a new `TestLogger` instance via `NewTestLogger()` instead of returning the receiver (f). This causes logs to be recorded on an un-referenced instance, leading to broken test assertions that expect logs to be recorded on the original logger.",
+          "severity": "High",
+          "candidate": "`TestLogger.FromContext` returns a new `TestLogger` instead of preserving the receiver's captured state, causing tests to miss log calls made through `FromContext(ctx)`.",
+          "path": "pkg/plugins/log/fake.go",
+          "line": 48
+        }
+      ],
+      "missed_critical_high": [
+        {
+          "golden_comment": "The ContextualLoggerMiddleware methods (QueryData, CallResource, CheckHealth, CollectMetrics) panic when a nil request is received. This occurs because they directly access req.PluginContext (via the instrumentContext function) without first checking if req is nil. This is a regression, as previous middleware layers gracefully handled nil requests.",
+          "severity": "High",
+          "category": "bug"
+        }
+      ],
+      "false_positives": [
+        "Document that `ContextualLoggerMiddleware` must be registered before `LoggerMiddleware`; otherwise `pluginId`, `endpoint`, `dsName`, `dsUID`, and `uname` fields are silently omitted.",
+        "`ContextualLoggerMiddleware` does not enrich contexts for `SubscribeStream`, `PublishStream`, or `RunStream`, leaving contextual logging fields unavailable for streaming requests.",
+        "Rename the top-level `TestInstrumentationMiddleware` test to match the `MetricsMiddleware` rename so test output and `-run` filters use consistent naming.",
+        "`grafanaInfraLogWrapper.FromContext` falls back to `d.New()` when the returned logger is not a `*log.ConcreteLogger`, silently discarding all contextual attributes."
+      ]
+    },
+    {
+      "url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/10",
+      "outcome": "findings",
+      "elapsed_seconds": 198.853,
+      "tp": 6,
+      "fp": 6,
+      "fn": 1,
+      "material_true_positives": [
+        {
+          "golden": "The SQL query in the `app/controllers/admin/embeddable_hosts_controller.rb` file uses string interpolation (`'#{h}'`) to insert values, which is vulnerable to SQL injection. It should use parameter binding or proper quoting to prevent this security vulnerability.",
+          "severity": "Critical",
+          "candidate": "Data migration interpolates the raw embeddable_hosts setting into an INSERT without quoting or escaping, causing SQL syntax failures for hosts containing single quotes and enabling SQL injection through stored setting content",
+          "path": "db/migrate/20150818190757_create_embeddable_hosts.rb",
+          "line": 25
+        },
+        {
+          "golden": "The migration accesses execute(...)[0]['id'] without checking if the query returned any rows, which causes a crash when no embed_category setting exists. This can lead to a broken feature when attempting to edit category/host relationships.",
+          "severity": "High",
+          "candidate": "Migration indexes [0] on the embed_category lookup result without checking whether any rows were returned, causing an exception and aborting upgrades when the setting is blank, unset, or unmatched",
+          "path": "db/migrate/20150818190757_create_embeddable_hosts.rb",
+          "line": 11
+        }
+      ],
+      "demoted_critical_high": [
+        {
+          "golden": "The EmbeddableHost model's before_validation callback calls self.host.sub! to strip http://, https://, and path segments, but if self.host is nil, this raises NoMethodError.",
+          "severity": "Critical",
+          "candidate": "EmbeddableHost's before_validation callback calls sub! on host without guarding against nil, causing a NoMethodError instead of a validation error when the host is missing",
+          "path": "app/models/embeddable_host.rb",
+          "line": 6
+        },
+        {
+          "golden": "The contents of `category_fabricator.rb` and `embeddable_host_fabricator.rb` have been swapped, resulting in the loss of original category fabricators and potentially causing errors in fabricator usage.",
+          "severity": "High",
+          "candidate": "Fabricator definitions are in the wrong files: category_fabricator.rb defines embeddable_host while embeddable_host_fabricator.rb defines category fabricators",
+          "path": "spec/fabricators/category_fabricator.rb",
+          "line": 1
+        }
+      ],
+      "missed_critical_high": [
+        {
+          "golden_comment": "Because this migration inserts embeddable_hosts rows with raw SQL, any existing embeddable_hosts values that include http:// or /https:// or path segments won\u2019t go through the EmbeddableHost model\u2019s normalization, so the new host lookup (which compares only the bare host) may fail for migrated data. Consider ensuring that migrated hosts are normalized to the same format as newly created EmbeddableHost records so existing embedding configurations keep working.",
+          "severity": "High",
+          "category": "data"
+        }
+      ],
+      "false_positives": [
+        "Admin::EmbeddingController#update does not persist any changes even though the client invokes it from saveChanges, making the save action silently ineffective",
+        "basePath uses type.replace('_', '-'), which replaces only the first underscore and breaks ADMIN_MODELS lookup for model names containing multiple underscores",
+        "The plural branch in _hydrateEmbedded uses a dead hydrated || [] fallback because map always returns an array",
+        "_hydrateEmbedded leaves undefined entries in plural hydrated collections when _lookupSubType cannot find a matching record",
+        "The host validation regex restricts TLDs to 2\u20135 letters and rejects valid longer TLDs, IP addresses, and localhost development hosts",
+        "EmbeddableHost.record_for_host returns false on URI parse failures but a record or nil otherwise, creating an inconsistent return contract"
+      ]
+    },
+    {
+      "url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/8",
+      "outcome": "findings",
+      "elapsed_seconds": 210.281,
+      "tp": 3,
+      "fp": 9,
+      "fn": 3,
+      "material_true_positives": [],
+      "demoted_critical_high": [],
+      "missed_critical_high": [
+        {
+          "golden_comment": " The findMembers() call is now asynchronous and unhandled. The controller may not have member data immediately available, creating a race condition.",
+          "severity": "High",
+          "category": "concurrency"
+        },
+        {
+          "golden_comment": "The route provides the group's ID in params[:id], but the code attempts to read it from params[:group_id], causing the action to fail. This results in a broken feature when trying to access group memberships.",
+          "severity": "High",
+          "category": "bug"
+        }
+      ],
+      "false_positives": [
+        "addMembers does not clear the username input after a successful add",
+        "addMembers does not handle failed PUT requests, leaving stale input and providing no user feedback",
+        "Removing the last member on the final page can leave offset equal to user_count, causing the reloaded list to display an empty page",
+        "New specs hardcode group ID 1, making them dependent on seeded database state and brittle",
+        "The admin groups get \"users\" route was removed, potentially causing remaining clients or API consumers to receive 404 responses",
+        "Admin::GroupsController#update permits visible and alias_level changes on automatic groups without an explicit policy guard",
+        "remove_member deletes membership through group.users.delete(user_id) instead of the group.remove(user) API, potentially bypassing group-specific removal semantics or callbacks",
+        "GroupsController#members does not cap caller-supplied limit values, allowing arbitrarily large member queries",
+        "GroupsController#members does not validate limit and offset as non-negative, so negative values can cause database errors and 500 responses"
+      ]
+    },
+    {
+      "url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/4",
+      "outcome": "findings",
+      "elapsed_seconds": 496.01,
+      "tp": 5,
+      "fp": 12,
+      "fn": 3,
+      "material_true_positives": [
+        {
+          "golden": "The TopicEmbed.import method is susceptible to a NoMethodError if the contents parameter is nil when attempting to append a string, and an XSS vulnerability due to unescaped url interpolation in the generated HTML.",
+          "severity": "Medium",
+          "candidate": "TopicEmbed.import inserts an unescaped feed-supplied URL into an HTML anchor that bypasses sanitization via `raw_html`, enabling stored markup injection/XSS",
+          "path": "app/models/topic_embed.rb",
+          "line": 13
+        }
+      ],
+      "demoted_critical_high": [
+        {
+          "golden": "Calling `i.content.scrub` assumes that `i.content` is always populated. However, many RSS feeds do not provide a `content` field, leading to a potential nil pointer exception when `i.content` is nil. A fallback to `description` should be implemented to prevent crashes.",
+          "severity": "High",
+          "candidate": "Jobs::PollFeed calls `i.content.scrub` without handling missing `<content>`, causing `NoMethodError` and aborting the non-retrying feed poll",
+          "path": "db/migrate/20131210181901_migrate_word_counts.rb",
+          "line": null
+        }
+      ],
+      "missed_critical_high": [
+        {
+          "golden_comment": "The PollFeed job calls open(SiteSetting.feed_polling_url) without validating the URL, allowing an attacker who controls the feed_polling_url site setting to make the server fetch arbitrary internal or external URLs.",
+          "severity": "Critical",
+          "category": "security"
+        },
+        {
+          "golden_comment": "An unescaped request header (request.referer) is interpolated into JavaScript without proper escaping, which can lead to XSS vulnerabilities if the referer contains malicious content. This issue can allow attackers to execute arbitrary scripts in the context of the application.",
+          "severity": "Critical",
+          "category": "security"
+        }
+      ],
+      "false_positives": [
+        "TopicEmbed.absolutize_urls treats protocol-relative URLs beginning with `//` as root-relative paths and rewrites them into broken URLs",
+        "embed.js assumes `discourseUrl` has a trailing slash when constructing the iframe URL, producing an invalid URL when the slash is omitted",
+        "EmbedController#ensure_embeddable rejects legitimate requests when the Referer header is stripped or absent",
+        "TopicRetriever#retrieved_recently? performs Redis SETNX and EXPIRE non-atomically, so a crash between them can leave a permanent throttle key",
+        "The shipped `create_top_topics` migration was modified with `force: true`, which can drop an existing `top_topics` table and destroy its data",
+        "Modifying an already-shipped migration does not repair environments where that migration has already run; the change should be made in a new migration",
+        "The Disqus importer removes the existing `--category` CLI option, breaking import scripts that depend on it",
+        "The Disqus importer now remotely fetches every source URL instead of creating local permalink posts, so unreachable source URLs can no longer be imported",
+        "Several added or modified files lack trailing newlines, causing lint failures and noisy diffs",
+        "The `migrate_word_counts` migration contains unnecessary whitespace-only churn",
+        "TopicEmbed.import_remote uses Kernel#open on strings without an explicit HTTP/HTTPS scheme allow-list; current call paths restrict exploitability, but using parsed URIs would provide safer defense in depth",
+        "Post#cook's `raw_html` branch bypasses sanitization for feed-imported content, allowing a compromised or malicious admin-configured feed to persist arbitrary HTML or scripts"
+      ]
+    },
+    {
+      "url": "https://github.com/calcom/cal.com/pull/11059",
+      "outcome": "findings",
+      "elapsed_seconds": 265.645,
+      "tp": 8,
+      "fp": 10,
+      "fn": 1,
+      "material_true_positives": [
+        {
+          "golden": "parseRefreshTokenResponse returns a Zod safeParse result ({ success, data, error }), not the credential key object. Persisting that as key stores the wrapper instead of the token payload; we should store the parsed data or use schema parse.",
+          "severity": "High",
+          "candidate": "Google Calendar refresh persists the entire SafeParse result object instead of the parsed credential data, corrupting the stored credential",
+          "path": "packages/app-store/googlecalendar/lib/CalendarService.ts",
+          "line": 97
+        },
+        {
+          "golden": "When APP_CREDENTIAL_SHARING_ENABLED and CALCOM_CREDENTIAL_SYNC_ENDPOINT are set, the refreshFunction helper returns the fetch Response, but several callers (for example GoogleCalendarService.refreshAccessToken expecting res.data, and HubspotCalendarService.refreshAccessToken expecting a HubspotToken) assume it returns the integration-specific token object. That mismatch will cause runtime errors in the sync-enabled path unless the return type or those call sites are adjusted.",
+          "severity": "High",
+          "candidate": "In credential-sync mode, refreshOAuthTokens returns a raw fetch Response while callers expect parsed token data or an axios-style response, breaking HubSpot, Zoho CRM, Zoho Bigin, and Google refresh flows",
+          "path": "packages/app-store/zoho-bigin/lib/CalendarService.ts",
+          "line": 93
+        },
+        {
+          "golden": "When the sync endpoint path is used, res is a fetch Response and has no .data; res?.data will be undefined and token.access_token will throw at runtime. This relies on a consistent return shape from refreshOAuthTokens, which isn\u2019t guaranteed currently.",
+          "severity": "High",
+          "candidate": "In credential-sync mode, refreshOAuthTokens returns a raw fetch Response while callers expect parsed token data or an axios-style response, breaking HubSpot, Zoho CRM, Zoho Bigin, and Google refresh flows",
+          "path": "packages/app-store/zoho-bigin/lib/CalendarService.ts",
+          "line": 93
+        },
+        {
+          "golden": "The `refreshOAuthTokens` function is passed `credentialId` instead of `userId`, which breaks the credential sync functionality by causing incorrect user lookups. This issue can lead to failures in syncing user credentials, impacting user experience.",
+          "severity": "High",
+          "candidate": "Zoho Bigin passes credentialId to refreshOAuthTokens where a Cal.com userId is expected, causing credential-sync requests to target the wrong identifier",
+          "path": "packages/app-store/zoho-bigin/lib/CalendarService.ts",
+          "line": 93
+        }
+      ],
+      "demoted_critical_high": [
+        {
+          "golden": "The parseRefreshTokenResponse function incorrectly sets refresh_token to the hardcoded string 'refresh_token' when it's missing from the OAuth refresh token response. This invalidates the token, breaking subsequent token refreshes and causing authentication failures.",
+          "severity": "High",
+          "candidate": "parseRefreshTokenResponse injects the placeholder \"refresh_token\" when no refresh token is returned, which can overwrite a valid stored refresh token",
+          "path": "apps/web/pages/api/webhook/app-credential.ts",
+          "line": 17
+        },
+        {
+          "golden": "The Zod schema in parseRefreshTokenResponse uses computed property keys [z.string().toString()] and [z.string().optional().toString()] in minimumTokenResponseSchema, which is invalid Zod syntax and will throw a runtime error.",
+          "severity": "High",
+          "candidate": "minimumTokenResponseSchema uses colliding computed literal keys from z.string().toString(), so it does not validate numeric expiry properties as intended",
+          "path": null,
+          "line": null
+        },
+        {
+          "golden": "The Salesforce integration checks `response.statusText` instead of `response.ok` when handling OAuth token refresh responses. This can lead to unreliable behavior, as a successful response may not be correctly identified, resulting in the use of stale credentials and potential authentication failures.",
+          "severity": "High",
+          "candidate": "Salesforce token refresh checks response.statusText instead of response.ok, potentially rejecting successful responses",
+          "path": "packages/app-store/salesforce/lib/CalendarService.ts",
+          "line": 75
+        }
+      ],
+      "missed_critical_high": [
+        {
+          "golden_comment": "The `jsforce.Connection` is created using stale `credentialKey.access_token` and `credentialKey.instance_url` after a token refresh, which can lead to authentication failures and incorrect data access. Ensure that the connection is established using the refreshed token values instead.",
+          "severity": "High",
+          "category": "bug"
+        }
+      ],
+      "false_positives": [
+        "minimumTokenResponseSchema strips unknown refresh-response fields by default, causing expiry and other token fields to be lost from parsed data",
+        "The app-credential webhook does not restrict requests to the POST method",
+        "APP_CREDENTIAL_SHARING_ENABLED is assigned a string-or-undefined expression rather than an explicit boolean",
+        "Salesforce refreshes and persists the access token every time a connection is constructed, adding latency, consuming rate limits, and creating write races",
+        "Zoho Bigin hardcodes its callback slug instead of deriving it from appConfig.slug, allowing the redirect URI to drift from configuration",
+        "Office 365 token-response parse failures now throw and prevent fallback to existing credentials",
+        "Office 365 refresh parsing removed detailed validation and raw-response logging, making token failures harder to diagnose",
+        "The app-credential webhook stores decrypted credential keys without validating them against the target app's credential schema",
+        "The .env.example encryption-key comment incorrectly describes openssl rand -base64 24 as producing a 32-byte key rather than a 32-character base64 string",
+        "The app-credential webhook compares its shared secret with a non-constant-time string comparison instead of crypto.timingSafeEqual"
+      ]
+    },
+    {
+      "url": "https://github.com/calcom/cal.com/pull/14740",
+      "outcome": "findings",
+      "elapsed_seconds": 151.442,
+      "tp": 3,
+      "fp": 7,
+      "fn": 3,
+      "material_true_positives": [],
+      "demoted_critical_high": [
+        {
+          "golden": "The addGuests.handler.ts blacklist check uses blacklistedGuestEmails.includes(guest) after lowercasing the blacklist but not the input guest emails, allowing attackers to bypass BLACKLISTED_GUEST_EMAILS restrictions by submitting emails with uppercase characters.",
+          "severity": "High",
+          "candidate": "Blacklist filtering compares lowercased blacklist entries against unnormalized guest emails, allowing mixed-case addresses to bypass BLACKLISTED_GUEST_EMAILS",
+          "path": null,
+          "line": null
+        },
+        {
+          "golden": "The logic for checking team admin/owner permissions is incorrect. This condition uses AND (&&) which requires both isTeamAdmin AND isTeamOwner to be true, but it should use OR (||) since a user needs to be either an admin OR an owner to have permission.",
+          "severity": "Critical",
+          "candidate": "Team admin/owner authorization uses logical AND instead of OR, denying addGuests permission to users who hold only one of the intended roles",
+          "path": "packages/emails/templates/organizer-add-guests-email.ts",
+          "line": 28
+        }
+      ],
+      "missed_critical_high": [],
+      "false_positives": [
+        "Duplicate-attendee filtering compares emails case-sensitively, allowing case-variant duplicate attendee rows",
+        "The add-guests email catch block swallows send failures and logs only a generic string without the error object or appropriate error-level logging",
+        "AddGuestsDialog always constructs a truthy error message, making the fallback toast unreachable and displaying an \"undefined:\" prefix when no error code exists",
+        "OrganizerAddGuestsEmail accesses attendees[0].name without checking that an attendee exists, risking a runtime error for attendee-less events",
+        "MultiEmail hardcodes the untranslated tooltip text \"Remove email\" instead of using localization",
+        "MultiEmail passes an empty fragment as EmailField's label without documenting the workaround or supporting a proper optional-label prop",
+        "The booking query unnecessarily includes user.credentials even though credentials are fetched separately, loading sensitive credential rows that are not used"
+      ]
+    },
+    {
+      "url": "https://github.com/calcom/cal.com/pull/8087",
+      "outcome": "findings",
+      "elapsed_seconds": 228.803,
+      "tp": 2,
+      "fp": 7,
+      "fn": 0,
+      "material_true_positives": [
+        {
+          "golden": "Consider adding try-catch around the await to handle import failures gracefully",
+          "severity": "Low",
+          "candidate": "Eager appStore import() promises can reject before handlers are attached, causing unhandled promise rejections at startup",
+          "path": "packages/app-store/index.ts",
+          "line": 31
+        }
+      ],
+      "demoted_critical_high": [
+        {
+          "golden": "The code uses forEach with async callbacks, which causes asynchronous operations (e.g., calendar/video event deletions, payment refunds) to run concurrently without being awaited. This 'fire-and-forget' behavior leads to unhandled promise rejections, race conditions, and incomplete cleanup, as surrounding try-catch blocks cannot properly handle errors from these unawaited promises. Replace forEach with for...of loops or Promise.all() with map() to ensure proper sequential execution and error handling.",
+          "severity": "Critical",
+          "candidate": "vital reschedule uses an async forEach callback, leaving deletion promises unawaited and causing newly async getCalendar failures to escape the surrounding try/catch as unhandled rejections",
+          "path": "packages/trpc/server/routers/viewer/bookings.tsx",
+          "line": 556
+        }
+      ],
+      "missed_critical_high": [],
+      "false_positives": [
+        "appStore creates all dynamic import() promises at module load, defeating lazy loading by fetching and evaluating every app immediately",
+        "Payment-service warnings stringify the awaited module namespace object instead of logging the app dirName, producing unactionable messages such as \"[object Module]\" in multiple files",
+        "vital and wipemycalother contain byte-for-byte duplicated reschedule cleanup logic that should be extracted into a shared helper to prevent maintenance drift",
+        "videoClient.deleteMeeting silently succeeds when a credential is missing or has no video adapter, hiding cleanup failures instead of logging the affected app",
+        "wipemycalother reschedule uses an async forEach callback, leaving deletion promises unawaited and causing newly async getCalendar failures to escape the surrounding try/catch as unhandled rejections",
+        "requestReschedule performs booking-reference cleanup in an async forEach callback, leaving deletions unawaited and causing getCalendar failures to escape as unhandled rejections",
+        "getCalendarCredentials calls the now-async getCalendar without await, changing each returned calendar field from Calendar | null to Promise<Calendar | null>"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+[
+  { "source": "sentry", "url": "https://github.com/getsentry/sentry/pull/67876" },
+  { "source": "sentry", "url": "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/5" },
+  { "source": "sentry", "url": "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/2" },
+  { "source": "grafana", "url": "https://github.com/grafana/grafana/pull/94942" },
+  { "source": "grafana", "url": "https://github.com/grafana/grafana/pull/79265" },
+  { "source": "grafana", "url": "https://github.com/grafana/grafana/pull/76186" },
+  { "source": "keycloak", "url": "https://github.com/keycloak/keycloak/pull/32918" },
+  { "source": "keycloak", "url": "https://github.com/keycloak/keycloak/pull/37634" },
+  { "source": "keycloak", "url": "https://github.com/keycloak/keycloak/pull/36880" },
+  { "source": "discourse", "url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/10" },
+  { "source": "discourse", "url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/4" },
+  { "source": "discourse", "url": "https://github.com/ai-code-review-evaluation/discourse-graphite/pull/8" },
+  { "source": "cal_dot_com", "url": "https://github.com/calcom/cal.com/pull/14740" },
+  { "source": "cal_dot_com", "url": "https://github.com/calcom/cal.com/pull/11059" },
+  { "source": "cal_dot_com", "url": "https://github.com/calcom/cal.com/pull/8087" }
+]

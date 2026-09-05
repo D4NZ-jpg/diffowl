@@ -1,0 +1,6 @@
+inputs/
+reports*/
+results*/
+checkouts/
+run*.log
+env.sh
