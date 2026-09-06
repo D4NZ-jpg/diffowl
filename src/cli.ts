@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -298,7 +299,20 @@ export async function runCli(args: readonly string[], io: CliIo = processIo): Pr
   }
 }
 
+// npm installs the bin as a symlink in node_modules/.bin, so argv[1] is the
+// link while import.meta.url is the real file. Resolve the link before comparing.
 const invokedPath = process.argv[1];
-if (invokedPath !== undefined && import.meta.url === pathToFileURL(invokedPath).href) {
+if (
+  invokedPath !== undefined &&
+  import.meta.url === pathToFileURL(resolveInvokedPath(invokedPath)).href
+) {
   process.exitCode = await runCli(process.argv.slice(2));
+}
+
+function resolveInvokedPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }

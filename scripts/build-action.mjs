@@ -1,3 +1,4 @@
+import { chmodSync } from "node:fs";
 import { build } from "esbuild";
 
 const shared = {
@@ -20,3 +21,7 @@ await Promise.all([
     outfile: "review-request/dist/index.js",
   }),
 ]);
+
+// npm sets the executable bit from the tarball mode, so the bin must be
+// executable here or a symlinked install (node_modules/.bin) silently no-ops.
+chmodSync("dist/cli.js", 0o755);
