@@ -26,7 +26,7 @@ If a role names a credential profile the adapter cannot resolve, the run fails c
 The Action resolves the `default` profile from the workflow environment. Pass provider keys as `env` entries backed by repository secrets:
 
 ```yaml
-- uses: D4NZ-jpg/diffowl@main
+- uses: D4NZ-jpg/diffowl@v0
   env:
     GITHUB_TOKEN: ${{ github.token }}
     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

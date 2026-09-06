@@ -26,7 +26,7 @@ To intentionally reset state for a pull request, delete the state ref and its ma
 Explicit self-hosted runs must pass a trusted durable directory:
 
 ```yaml
-- uses: D4NZ-jpg/diffowl@main
+- uses: D4NZ-jpg/diffowl@v0
   with:
     self-hosted-state-directory: /srv/diffowl-state
 ```
@@ -78,7 +78,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: D4NZ-jpg/diffowl/review-request@main
+      - uses: D4NZ-jpg/diffowl/review-request@v0
         with:
           workflow: review-owl.yml
         env:

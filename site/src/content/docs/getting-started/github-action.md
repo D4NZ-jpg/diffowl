@@ -8,17 +8,44 @@ Diffowl's GitHub integration has two boundaries:
 1. the **Review OWL Action**, which adapts a verified pull-request context to the review engine;
 2. the optional **request router**, which authenticates comment commands before dispatching the canonical workflow.
 
-## Basic pull-request review
+## Request-only review
 
-Use the workflow from the [quick start](../quick-start/) when you only need automatic review on pull-request changes.
+The [quick start](../quick-start/) installs the recommended shape: a router on comments plus a review workflow that only accepts the router's `workflow_dispatch`. Nothing runs until someone comments `/diffowl review`.
 
-The workflow requires:
+## Automatic review on every pull request
+
+To also review on push, add a `pull_request` trigger to `review-owl.yml` and let the checkout fall back to the event head:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      # same inputs as the quick start
+
+jobs:
+  review:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.head-repository || github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ inputs.head-sha || github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: D4NZ-jpg/diffowl@v0
+        # inputs and env as in the quick start
+```
+
+On `pull_request` events GitHub withholds repository secrets from fork heads, so fork pull requests on this trigger are classified untrusted and produce `partial_coverage` without a model call. Use `pull_request`, never `pull_request_target`.
+
+The review workflow requires:
 
 - a full-history checkout of the exact head SHA;
 - `contents: write` for durable Git-ref state on GitHub-hosted runners;
 - `pull-requests: write` for review publication;
 - `issues: read` for pull-request and discussion context;
-- the provider secrets referenced by base-branch policy.
+- either the credential-store secrets or the provider keys referenced by base-branch policy, and nothing else in that job.
 
 ## Review and finding commands
 
@@ -44,7 +71,7 @@ Trusted same-repository runs store finding ledgers and versioned run records und
 Set the Action input `self-hosted-state-directory` to a trusted, durable directory that survives separate workflow invocations.
 
 ```yaml
-- uses: D4NZ-jpg/diffowl@main
+- uses: D4NZ-jpg/diffowl@v0
   with:
     self-hosted-state-directory: /var/lib/diffowl/state
 ```
@@ -53,6 +80,6 @@ Do not place this directory under pull-request-controlled content or upload it a
 
 ## Publication behavior
 
-The engine returns data; the adapter owns GitHub effects. When actionable findings exist, Diffowl publishes one non-approving pull-request review. Changed-line findings become inline comments, while unanchored findings appear in the review body.
+The engine returns data; the adapter owns GitHub effects. When actionable findings exist, Diffowl publishes one non-approving pull-request review. Changed-line findings become inline comments, while unanchored findings appear in the review body. Non-blocking suggestions appear according to `presentation.advisories` in policy: folded into one collapsed block by default.
 
 The existing workflow check is the merge-gating surface. Diffowl does not create a duplicate check or a maintained summary comment.

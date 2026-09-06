@@ -53,7 +53,11 @@ Diffowl keeps review semantics in the engine and GitHub-specific behavior in the
 
 ## Quick start: GitHub Action
 
-Create `.github/workflows/review-owl.yml`:
+The recommended install is request-only: a router that runs on `/diffowl review` comments, and a review workflow that only accepts the router's verified dispatch. Credentials come from a shared Postgres row so a subscription login can be used, or from provider API keys. Both workflow files, the policy, and the one-time credential setup are in the [quick start](https://d4nz-jpg.github.io/diffowl/getting-started/quick-start/).
+
+Pin to a release: `uses: D4NZ-jpg/diffowl@v0` and `uses: D4NZ-jpg/diffowl/review-request@v0`.
+
+The shortest possible automatic variant, with provider keys:
 
 ```yaml
 name: Review OWL
@@ -74,20 +78,20 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: D4NZ-jpg/diffowl@main
+      - uses: D4NZ-jpg/diffowl@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-This workflow reviews pull requests when they are opened, updated, or reopened. Add the provider secrets required by your `.diffowl.json` role profiles.
+Keep this job to checkout plus the Action, with the provider secret as its only secret; dependency installation belongs in the policy's `validationCommands`. Fork pull requests get no secrets from GitHub on this trigger and are reviewed statically or not at all.
 
 ## Advanced: review and finding commands
 
@@ -109,14 +113,17 @@ Diffowl reads `.diffowl.json` from the pull request's **base commit**. Unsupport
     "excludePaths": ["dist/**"]
   },
   "limits": {
-    "reviewTimeoutSeconds": 600,
+    "reviewTimeoutSeconds": 1800,
     "maxFindings": 25
   },
   "verification": {
-    "validationCommands": []
+    "validationCommands": [{ "argv": ["npm", "ci", "--ignore-scripts"], "timeoutSeconds": 300 }]
   },
   "reviewRequests": {
     "cooldownSeconds": 300
+  },
+  "presentation": {
+    "advisories": "summary"
   },
   "roleProfiles": {
     "reviewer": {
