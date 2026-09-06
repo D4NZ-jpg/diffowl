@@ -735,9 +735,9 @@ it("maps non-clean Review outcomes to a failing workflow check", () => {
   ).toBe(1);
 });
 
-it("removes GITHUB_TOKEN from the engine environment while retaining a publisher", () => {
+it("removes GITHUB_TOKEN from the engine environment while retaining a publisher", async () => {
   const env = { GITHUB_TOKEN: "publisher-secret", GITHUB_OUTPUT: "output" };
-  const io = createActionIo(env);
+  const io = await createActionIo(env);
   expect(env.GITHUB_TOKEN).toBeUndefined();
   expect(io.publishOutcome).toBeTypeOf("function");
   expect(io.gitPersistence).toBeInstanceOf(GitReviewPersistenceStore);

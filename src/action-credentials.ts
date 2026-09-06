@@ -1,6 +1,3 @@
-import { createPostgresCredentialStore } from "@runcell/postgres-credentials";
-import pg from "pg";
-
 import type { DiffowlCredentials } from "./review-orchestration.js";
 
 /**
@@ -40,13 +37,21 @@ function take(env: NodeJS.ProcessEnv, name: string): string | undefined {
  * Without the URL, provider keys are read from `*_API_KEY` / `*_BASE_URL`
  * environment variables as before.
  */
-export function resolveActionCredentials(env: NodeJS.ProcessEnv): ActionCredentialResolution {
+export async function resolveActionCredentials(
+  env: NodeJS.ProcessEnv,
+): Promise<ActionCredentialResolution> {
   const url = take(env, CREDENTIAL_STORE_URL);
   const key = take(env, CREDENTIAL_STORE_KEY) ?? CREDENTIAL_STORE_DEFAULT_KEY;
   const secret = take(env, CREDENTIAL_STORE_SECRET);
   if (url === undefined) {
     return { profiles: { default: { type: "env" } }, close: async () => undefined, source: "env" };
   }
+  // Loaded only when a store is configured: pg and the store add about 1.5s of
+  // module initialization that env-credential runs should not pay.
+  const [{ createPostgresCredentialStore }, { default: pg }] = await Promise.all([
+    import("@runcell/postgres-credentials"),
+    import("pg"),
+  ]);
   const pool = new pg.Pool({ connectionString: url, max: 2 });
   const store = createPostgresCredentialStore({
     pool,

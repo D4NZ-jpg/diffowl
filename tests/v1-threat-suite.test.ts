@@ -327,7 +327,7 @@ it("threat: secret tokens are not exposed to the engine or untrusted publishers"
     GITHUB_EVENT_PATH: "event.json",
     GITHUB_TOKEN: "publisher-secret",
   };
-  createActionIo(env);
+  await createActionIo(env);
   let published = false;
 
   const outcome = await runAction(env, {
@@ -356,7 +356,7 @@ it("threat: credential-store secrets are consumed before any role or validation 
     DIFFOWL_CREDENTIAL_STORE_KEY: "team-row",
     DIFFOWL_CREDENTIAL_STORE_SECRET: "encryption-secret",
   };
-  const io = createActionIo(env);
+  const io = await createActionIo(env);
 
   // All three are gone from the process environment the moment the Action io
   // exists, which is before the engine, a role sandbox, or a validation
@@ -377,7 +377,7 @@ it("threat: credential-store secrets are consumed before any role or validation 
   // Without a store URL the default profile is env, and nothing is consumed
   // beyond the GitHub token.
   const plain: NodeJS.ProcessEnv = { GITHUB_TOKEN: "t", ANTHROPIC_API_KEY: "k" };
-  const plainIo = createActionIo(plain);
+  const plainIo = await createActionIo(plain);
   expect(plainIo.credentialProfiles).toEqual({ default: { type: "env" } });
   expect(plain.ANTHROPIC_API_KEY).toBe("k");
 });

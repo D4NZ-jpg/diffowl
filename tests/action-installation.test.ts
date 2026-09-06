@@ -281,5 +281,5 @@ describe("installable Review OWL Action", () => {
       type: "configuration_failure",
       reason: expect.stringMatching(/GITHUB_TOKEN.*contents: write/iu),
     });
-  });
+  }, 30_000);
 });

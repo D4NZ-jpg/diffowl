@@ -113,10 +113,10 @@ function readGitHead(): Promise<string> {
   });
 }
 
-export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
+export async function createActionIo(env: NodeJS.ProcessEnv): Promise<ActionIo> {
   const token = env.GITHUB_TOKEN;
   delete env.GITHUB_TOKEN;
-  const credentials = resolveActionCredentials(env);
+  const credentials = await resolveActionCredentials(env);
   const transport =
     token === undefined ? undefined : createGitHubTransport(token, env.GITHUB_API_URL);
   return {
@@ -343,10 +343,8 @@ async function classifyActionTrust(
 }
 
 // oxlint-disable-next-line complexity, max-lines-per-function
-export async function runAction(
-  env: NodeJS.ProcessEnv,
-  io: ActionIo = createActionIo(env),
-): Promise<ReviewOutcome> {
+export async function runAction(env: NodeJS.ProcessEnv, io?: ActionIo): Promise<ReviewOutcome> {
+  io ??= await createActionIo(env);
   const resolved = await resolveActionEvent(env, io);
   if (!resolved.valid) return unsafeContextOutcome(io, resolved.type, resolved.reason);
   const { event } = resolved;

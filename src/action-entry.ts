@@ -1,7 +1,7 @@
 import { createActionIo, runAction } from "./action.js";
 import { actionExitCodeForOutcome } from "./action-readiness.js";
 
-const io = createActionIo(process.env);
+const io = await createActionIo(process.env);
 try {
   const outcome = await runAction(process.env, io);
   process.stdout.write(`${JSON.stringify(outcome)}\n`);

@@ -2,12 +2,6 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import {
-  createPostgresCredentialStore,
-  postgresCredentialStoreSql,
-} from "@runcell/postgres-credentials";
-import pg from "pg";
-
 import { CREDENTIAL_STORE_DEFAULT_KEY } from "./action-credentials.js";
 import type { DiffowlAuthBlob, DiffowlStoredCredential } from "./review-orchestration.js";
 
@@ -17,7 +11,12 @@ export interface CredentialsCliIo {
   stderr(text: string): void;
   env: NodeJS.ProcessEnv;
   /** Test seam; defaults to a Postgres-backed store for the given URL. */
-  openStore?(url: string, secret: string | undefined): { store: StoreLike; close(): Promise<void> };
+  openStore?(
+    url: string,
+    secret: string | undefined,
+  ):
+    | Promise<{ store: StoreLike; close(): Promise<void> }>
+    | { store: StoreLike; close(): Promise<void> };
 }
 
 interface StoreLike {
@@ -78,10 +77,14 @@ function isStoredCredential(value: unknown): value is DiffowlStoredCredential {
   );
 }
 
-function defaultOpenStore(
+async function defaultOpenStore(
   url: string,
   secret: string | undefined,
-): { store: StoreLike; close(): Promise<void> } {
+): Promise<{ store: StoreLike; close(): Promise<void> }> {
+  const [{ createPostgresCredentialStore }, { default: pg }] = await Promise.all([
+    import("@runcell/postgres-credentials"),
+    import("pg"),
+  ]);
   const pool = new pg.Pool({ connectionString: url, max: 1 });
   const store = createPostgresCredentialStore({
     pool,
@@ -91,11 +94,13 @@ function defaultOpenStore(
   return { store, close: () => pool.end() };
 }
 
-function storeFrom(io: CredentialsCliIo): { store: StoreLike; close(): Promise<void> } | string {
+async function storeFrom(
+  io: CredentialsCliIo,
+): Promise<{ store: StoreLike; close(): Promise<void> } | string> {
   const url = io.env.DIFFOWL_CREDENTIAL_STORE_URL?.trim();
   if (url === undefined || url === "") return "DIFFOWL_CREDENTIAL_STORE_URL is not set.";
   const secret = io.env.DIFFOWL_CREDENTIAL_STORE_SECRET?.trim();
-  return (io.openStore ?? defaultOpenStore)(url, secret === "" ? undefined : secret);
+  return await (io.openStore ?? defaultOpenStore)(url, secret === "" ? undefined : secret);
 }
 
 async function push(args: readonly string[], io: CredentialsCliIo): Promise<number> {
@@ -118,7 +123,7 @@ async function push(args: readonly string[], io: CredentialsCliIo): Promise<numb
     }
     selected[provider] = entry;
   }
-  const opened = storeFrom(io);
+  const opened = await storeFrom(io);
   if (typeof opened === "string") {
     io.stderr(`${opened}\n`);
     return 2;
@@ -139,7 +144,7 @@ async function push(args: readonly string[], io: CredentialsCliIo): Promise<numb
 
 async function status(args: readonly string[], io: CredentialsCliIo): Promise<number> {
   const key = args[0] === "--key" && args[1] !== undefined ? args[1] : CREDENTIAL_STORE_DEFAULT_KEY;
-  const opened = storeFrom(io);
+  const opened = await storeFrom(io);
   if (typeof opened === "string") {
     io.stderr(`${opened}\n`);
     return 2;
@@ -172,6 +177,7 @@ export async function runCredentialsCli(
 ): Promise<number> {
   const [command, ...rest] = args;
   if (command === "sql") {
+    const { postgresCredentialStoreSql } = await import("@runcell/postgres-credentials");
     io.stdout(`${postgresCredentialStoreSql()}\n`);
     return 0;
   }
