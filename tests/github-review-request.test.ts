@@ -64,6 +64,7 @@ it("routes GitHub effects to the default-branch workflow with the verified head"
         "pull-request-number": "42",
         "base-sha": "base-sha",
         "head-sha": "head-sha",
+        "head-repository": "example/repository",
         "review-request-event-id": "9001",
       },
     },

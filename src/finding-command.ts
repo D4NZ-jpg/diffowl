@@ -1,4 +1,7 @@
-import { findingCommandAuthorizationReason } from "./finding-command-authorization.js";
+import {
+  findingCommandAuthorizationReason,
+  type HeadAdmission,
+} from "./finding-command-authorization.js";
 import {
   findingIdentityMarker,
   parseFindingDiscussionCommandBody,
@@ -6,6 +9,7 @@ import {
 } from "./finding-discussion.js";
 import type { PullRequestPersistenceKey, ReviewPersistenceStore } from "./persistence.js";
 import {
+  collaboratorForksTrusted,
   parseProjectPolicy,
   PROJECT_POLICY_CEILINGS,
   REVIEW_REQUEST_COOLDOWN_DEFAULT_SECONDS,
@@ -16,7 +20,11 @@ import {
   saveReviewRequestEffect,
 } from "./review-request-lifecycle.js";
 import { routedCommandContext, type ReviewRequestEventRecord } from "./review-request-state.js";
-import type { ReviewDispatch, ReviewRequestPullRequest } from "./review-request.js";
+import type {
+  RepositoryPermission,
+  ReviewDispatch,
+  ReviewRequestPullRequest,
+} from "./review-request.js";
 
 export interface FindingCommandReviewComment {
   id: string;
@@ -36,6 +44,7 @@ export interface FindingCommandEvent extends FindingCommandReviewComment {
 export interface FindingCommandIo {
   readPullRequest(repository: string, pullRequestNumber: number): Promise<ReviewRequestPullRequest>;
   readPolicy(revision: string): Promise<string | undefined>;
+  readPermission(repository: string, actor: string): Promise<RepositoryPermission>;
   readReviewComment(repository: string, commentId: string): Promise<FindingCommandReviewComment>;
   addEyes(eventId: string): Promise<void>;
   replyOnce(eventId: string, rootCommentId: string | undefined, message: string): Promise<void>;
@@ -147,6 +156,22 @@ async function refuse(
   return { type: "refused", reason };
 }
 
+async function findingHeadAdmission(
+  event: FindingCommandEvent,
+  pullRequest: ReviewRequestPullRequest,
+  io: FindingCommandIo,
+  policy: ReturnType<typeof parseProjectPolicy>,
+): Promise<HeadAdmission> {
+  const forksTrusted = policy.valid && collaboratorForksTrusted(policy.policy);
+  if (pullRequest.headRepository === pullRequest.baseRepository || !forksTrusted) {
+    return { collaboratorForksTrusted: forksTrusted, authorPermission: "none" };
+  }
+  return {
+    collaboratorForksTrusted: forksTrusted,
+    authorPermission: await io.readPermission(event.repository, pullRequest.author),
+  };
+}
+
 // oxlint-disable-next-line complexity, max-lines-per-function
 export async function routeFindingCommand(
   event: FindingCommandEvent,
@@ -165,7 +190,11 @@ export async function routeFindingCommand(
   const entry =
     fingerprint === undefined ? undefined : await findingState(persistence, key, fingerprint);
   const policy = parseProjectPolicy(await io.readPolicy(pullRequest.baseSha));
-  const denied = findingCommandAuthorizationReason(event, pullRequest);
+  const denied = findingCommandAuthorizationReason(
+    event,
+    pullRequest,
+    await findingHeadAdmission(event, pullRequest, io, policy),
+  );
   const reason =
     denied ??
     (root === undefined || recognized === undefined
@@ -215,6 +244,7 @@ export async function routeFindingCommand(
       ref: event.defaultBranch,
       baseSha: pullRequest.baseSha,
       headSha: dispatchRecord.headSha,
+      headRepository: pullRequest.headRepository,
       eventId: dispatchRecord.eventId,
       ...routedCommandContext(dispatchRecord),
     });

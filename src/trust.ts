@@ -13,6 +13,14 @@ export type TrustContext =
       repository: string;
       headRepository: string;
       actor: string | undefined;
+      /**
+       * The pull-request author's verified permission on the base repository,
+       * read from the collaborators API by the caller. Only consulted for fork
+       * heads, and only when the base-branch policy opts in to collaborator
+       * forks. Absent means unknown, which is treated as no permission.
+       */
+      authorPermission?: RepositoryPermission | undefined;
+      collaboratorForksTrusted?: boolean | undefined;
     }
   | { type: "local_cli" }
   | { type: "privileged_publisher"; validation: PublisherValidation }
@@ -30,9 +38,28 @@ export interface TrustCapabilities {
   publishing: "sha_bound_data_only" | "denied";
 }
 
+export type RepositoryPermission = "none" | "read" | "triage" | "write" | "maintain" | "admin";
+
+export const writableRepositoryPermissions: ReadonlySet<RepositoryPermission> = new Set([
+  "write",
+  "maintain",
+  "admin",
+]);
+
 export type TrustClassification =
   | {
       class: "trusted_same_repo_pull_request";
+      capabilities: TrustCapabilities;
+    }
+  | {
+      /**
+       * A fork pull request whose author holds write, maintain, or admin
+       * permission on the base repository, admitted by base-branch policy. Same
+       * capabilities as a same-repository pull request; the class name is kept
+       * distinct so run records and publication show how trust was granted.
+       */
+      class: "trusted_collaborator_fork_pull_request";
+      authorPermission: RepositoryPermission;
       capabilities: TrustCapabilities;
     }
   | {
@@ -122,7 +149,24 @@ export function classifyTrust(context: TrustContext): TrustClassification {
     };
   }
 
+  const pullRequestCapabilities: TrustCapabilities = {
+    ...deniedCapabilities,
+    validationCommands: "sandboxed",
+    secrets: "provider_credentials_only",
+  };
+
   if (context.headRepository !== context.repository) {
+    const permission = context.authorPermission ?? "none";
+    if (
+      context.collaboratorForksTrusted === true &&
+      writableRepositoryPermissions.has(permission)
+    ) {
+      return {
+        class: "trusted_collaborator_fork_pull_request",
+        authorPermission: permission,
+        capabilities: pullRequestCapabilities,
+      };
+    }
     return {
       class: "untrusted_pull_request",
       source: "fork",
@@ -132,10 +176,14 @@ export function classifyTrust(context: TrustContext): TrustClassification {
 
   return {
     class: "trusted_same_repo_pull_request",
-    capabilities: {
-      ...deniedCapabilities,
-      validationCommands: "sandboxed",
-      secrets: "provider_credentials_only",
-    },
+    capabilities: pullRequestCapabilities,
   };
+}
+
+/** Pull-request trust classes that may run the review with provider credentials and publish. */
+export function isTrustedPullRequest(trust: TrustClassification): boolean {
+  return (
+    trust.class === "trusted_same_repo_pull_request" ||
+    trust.class === "trusted_collaborator_fork_pull_request"
+  );
 }

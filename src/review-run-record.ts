@@ -33,6 +33,7 @@ const lifecycleStates = new Set<FindingLifecycleState>([
 
 const trustClasses = new Set<TrustClassification["class"]>([
   "trusted_same_repo_pull_request",
+  "trusted_collaborator_fork_pull_request",
   "untrusted_pull_request",
   "local_cli",
   "privileged_publisher",

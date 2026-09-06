@@ -1,3 +1,5 @@
+import { type AdvisoryPresentation, validateOptionalSections } from "./project-policy-options.js";
+
 export const PROJECT_POLICY_PATH = ".diffowl.json";
 export const REVIEW_REQUEST_COOLDOWN_DEFAULT_SECONDS = 300;
 export const REVIEW_REQUEST_COOLDOWN_MINIMUM_SECONDS = 60;
@@ -73,34 +75,28 @@ export interface ProjectPolicy {
   presentation?: {
     advisories?: AdvisoryPresentation;
   };
+  trust?: {
+    collaboratorForks?: boolean;
+  };
 }
 
-/**
- * Where advisory suggestions appear on GitHub. Material findings are always
- * published; this only controls the non-blocking tier.
- * - `off`: engine output only, nothing on GitHub.
- * - `summary`: one collapsed block at the end of the review body and a count in
- *   the job summary. Default.
- * - `inline`: each anchored advisory becomes its own review comment.
- */
-export type AdvisoryPresentation = "off" | "summary" | "inline";
-
-export const ADVISORY_PRESENTATIONS: readonly AdvisoryPresentation[] = ["off", "summary", "inline"];
-export const ADVISORY_PRESENTATION_DEFAULT: AdvisoryPresentation = "summary";
-
-export function advisoryPresentation(policy: ProjectPolicy): AdvisoryPresentation {
-  return policy.presentation?.advisories ?? ADVISORY_PRESENTATION_DEFAULT;
-}
+export {
+  ADVISORY_PRESENTATION_DEFAULT,
+  ADVISORY_PRESENTATIONS,
+  advisoryPresentation,
+  collaboratorForksTrusted,
+  type AdvisoryPresentation,
+} from "./project-policy-options.js";
 
 export type PolicyParseResult =
   | { valid: true; policy: ProjectPolicy }
   | { valid: false; reason: string };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function unsupportedField(
+export function unsupportedField(
   value: Record<string, unknown>,
   supported: readonly string[],
   location: string,
@@ -285,16 +281,6 @@ function validateReviewRequests(value: unknown): string | undefined {
     : undefined;
 }
 
-function validatePresentation(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) return "Project policy presentation must be an object.";
-  const fieldError = unsupportedField(value, ["advisories"], "presentation");
-  if (fieldError !== undefined || value.advisories === undefined) return fieldError;
-  return ADVISORY_PRESENTATIONS.includes(value.advisories as AdvisoryPresentation)
-    ? undefined
-    : `Project policy presentation.advisories must be one of ${ADVISORY_PRESENTATIONS.map((option) => `"${option}"`).join(", ")}.`;
-}
-
 function validatePolicy(value: unknown): string | undefined {
   if (!isRecord(value)) return "Project policy must be a JSON object.";
   const fieldError = unsupportedField(
@@ -307,6 +293,7 @@ function validatePolicy(value: unknown): string | undefined {
       "roleProfiles",
       "reviewRequests",
       "presentation",
+      "trust",
     ],
     "root",
   );
@@ -321,7 +308,7 @@ function validatePolicy(value: unknown): string | undefined {
     ) ??
     validateRoleProfiles(value.roleProfiles) ??
     validateReviewRequests(value.reviewRequests) ??
-    validatePresentation(value.presentation)
+    validateOptionalSections(value)
   );
 }
 

@@ -38,7 +38,7 @@ export async function readReviewRequestPullRequest(
   };
 }
 
-async function readPermission(
+export async function readRepositoryPermission(
   transport: GitHubTransport,
   repository: string,
   actor: string,
@@ -95,6 +95,7 @@ export function workflowDispatchRequest(
         "pull-request-number": String(request.pullRequestNumber),
         "base-sha": request.baseSha,
         "head-sha": request.headSha,
+        "head-repository": request.headRepository,
         "review-request-event-id": request.eventId,
         ...(findingCommand ? { "command-work-type": request.workType ?? "full_review" } : {}),
         ...(request.findingFingerprint === undefined
@@ -125,7 +126,7 @@ export function createGitHubReviewRequestIo(
   return {
     readPullRequest: (repository, pullRequestNumber) =>
       readReviewRequestPullRequest(transport, repository, pullRequestNumber),
-    readPermission: (repository, actor) => readPermission(transport, repository, actor),
+    readPermission: (repository, actor) => readRepositoryPermission(transport, repository, actor),
     readPolicy: options.readPolicy,
     addEyes: async (eventId) => {
       await transport({

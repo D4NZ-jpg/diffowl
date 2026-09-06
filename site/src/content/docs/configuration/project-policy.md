@@ -53,7 +53,7 @@ Policy fields are closed. Any unsupported field, at any nesting level, produces 
 }
 ```
 
-Required top-level fields: `version`, `scope`, `limits`, `verification`, `roleProfiles`. Optional: `reviewRequests`, `presentation`.
+Required top-level fields: `version`, `scope`, `limits`, `verification`, `roleProfiles`. Optional: `reviewRequests`, `presentation`, `trust`.
 
 ## `version`
 
@@ -125,6 +125,14 @@ Controls where non-blocking advisory suggestions appear on GitHub. Material Find
 | `advisories` | `off`, `summary`, `inline` | `summary` | `off`: suggestions stay in the engine outcome only. `summary`: one collapsed block at the end of the pull-request review plus a count in the job summary. `inline`: each suggestion anchored to a changed line becomes its own review comment; the rest go in the collapsed block. |
 
 Suggestions never change Review readiness or the check conclusion. A `clean` review with suggestions publishes a non-approving comment review containing only the collapsed block. Start with `summary`; switch to `inline` if the team acts on suggestions, or `off` if they add noise.
+
+## `trust` (optional)
+
+| Field               | Type    | Default | Meaning                                                                                                                                                                                                                                              |
+| ------------------- | ------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collaboratorForks` | boolean | `false` | Review fork pull requests with same-repository capabilities when the author has `write`, `maintain`, or `admin` permission on the base repository. Permission is read from GitHub at review time. See [Trust model](/diffowl/security/trust-model/). |
+
+Keep this `false` on public repositories. Turn it on when your team works from personal forks of a private repository and reviews go through `/diffowl review`; the request-only workflow must check out `inputs.head-repository` (see the example workflow).
 
 ## `roleProfiles`
 

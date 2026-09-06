@@ -1,7 +1,12 @@
-import { findingCommandAuthorizationReason } from "./finding-command-authorization.js";
+import {
+  findingCommandAuthorizationReason,
+  headAdmitted,
+  type HeadAdmission,
+} from "./finding-command-authorization.js";
 import type { PullRequestPersistenceKey, ReviewPersistenceStore } from "./persistence.js";
 import { recognizePullRequestCommand, resolvePullRequestCommand } from "./pull-request-command.js";
 import {
+  collaboratorForksTrusted,
   parseProjectPolicy,
   PROJECT_POLICY_CEILINGS,
   REVIEW_REQUEST_COOLDOWN_DEFAULT_SECONDS,
@@ -17,6 +22,7 @@ import type {
   ReviewRequestEventRecord,
   RoutedCommand,
 } from "./review-request-state.js";
+import { type RepositoryPermission, writableRepositoryPermissions } from "./trust.js";
 
 export {
   claimReviewRequest,
@@ -34,6 +40,8 @@ export interface ReviewRequestEvent {
   createdAt?: string | undefined;
 }
 
+export type { RepositoryPermission };
+
 export interface ReviewRequestPullRequest {
   number: number;
   author: string;
@@ -43,14 +51,14 @@ export interface ReviewRequestPullRequest {
   headRepository: string;
 }
 
-export type RepositoryPermission = "none" | "read" | "triage" | "write" | "maintain" | "admin";
-
 export interface ReviewDispatch {
   repository: string;
   pullRequestNumber: number;
   ref: string;
   baseSha: string;
   headSha: string;
+  /** The verified head repository; equals `repository` unless a collaborator fork was admitted. */
+  headRepository: string;
   eventId: string;
   command?: RoutedCommand | undefined;
   workType?: CommandWorkType | undefined;
@@ -74,7 +82,6 @@ export type ReviewRequestResult =
   | { type: "refused"; reason: string }
   | { type: "ignored" };
 
-const writablePermissions = new Set<RepositoryPermission>(["write", "maintain", "admin"]);
 const dependabotLogin = /^dependabot(?:\[bot\])?$/iu;
 
 function keyFor(event: ReviewRequestEvent): PullRequestPersistenceKey {
@@ -85,17 +92,16 @@ function authorizationReason(
   event: ReviewRequestEvent,
   pullRequest: ReviewRequestPullRequest,
   permission: RepositoryPermission,
+  admission: HeadAdmission,
 ): string | undefined {
-  const sameRepository =
-    pullRequest.baseRepository === event.repository &&
-    pullRequest.headRepository === event.repository;
-  if (!sameRepository) {
-    return "Diffowl only accepts Review requests for same-repository pull requests.";
+  if (!headAdmitted(event, pullRequest, admission)) {
+    return "Diffowl only accepts Review requests for same-repository pull requests, or fork pull requests whose author has write access when policy trusts collaborator forks.";
   }
   if (dependabotLogin.test(pullRequest.author) || dependabotLogin.test(event.actor)) {
     return "Diffowl does not accept privileged Review requests from Dependabot.";
   }
-  if (event.actor === pullRequest.author || writablePermissions.has(permission)) return undefined;
+  if (event.actor === pullRequest.author || writableRepositoryPermissions.has(permission))
+    return undefined;
   return "Diffowl Review requests require the pull-request author or write, maintain, or admin access.";
 }
 
@@ -106,20 +112,45 @@ interface RouteContext {
   reason?: string | undefined;
 }
 
+/**
+ * The author's base-repository permission is fetched only when it can matter:
+ * the head is a fork and policy admits collaborator forks. Same-repository
+ * heads never need it, and an untrusted fork is refused without a lookup.
+ */
+async function headAdmission(
+  event: ReviewRequestEvent,
+  pullRequest: ReviewRequestPullRequest,
+  io: ReviewRequestIo,
+  policy: ReturnType<typeof parseProjectPolicy>,
+): Promise<HeadAdmission> {
+  const forksTrusted = policy.valid && collaboratorForksTrusted(policy.policy);
+  const isFork = pullRequest.headRepository !== pullRequest.baseRepository;
+  if (!isFork || !forksTrusted) {
+    return { collaboratorForksTrusted: forksTrusted, authorPermission: "none" };
+  }
+  return {
+    collaboratorForksTrusted: forksTrusted,
+    authorPermission: await io.readPermission(event.repository, pullRequest.author),
+  };
+}
+
 async function routeContext(
   event: ReviewRequestEvent,
   io: ReviewRequestIo,
   findingCommand: boolean,
 ): Promise<RouteContext> {
   const pullRequest = await io.readPullRequest(event.repository, event.pullRequestNumber);
+  // Policy is read from the base revision before authorization: it decides
+  // whether a fork head can be admitted at all.
+  const policy = parseProjectPolicy(await io.readPolicy(pullRequest.baseSha));
+  const admission = await headAdmission(event, pullRequest, io, policy);
   const permission =
     event.actor === pullRequest.author || findingCommand
       ? "read"
       : await io.readPermission(event.repository, event.actor);
   const denied = findingCommand
-    ? findingCommandAuthorizationReason(event, pullRequest)
-    : authorizationReason(event, pullRequest, permission);
-  const policy = parseProjectPolicy(await io.readPolicy(pullRequest.baseSha));
+    ? findingCommandAuthorizationReason(event, pullRequest, admission)
+    : authorizationReason(event, pullRequest, permission, admission);
   return {
     pullRequest,
     cooldownSeconds: policy.valid
@@ -176,6 +207,7 @@ async function dispatch(
     ref: event.defaultBranch,
     baseSha: pullRequest.baseSha,
     headSha: record.headSha,
+    headRepository: pullRequest.headRepository,
     eventId: record.eventId,
     ...routedCommandContext(record),
   });

@@ -11,9 +11,19 @@ Diffowl classifies trust before it reads pull-request-controlled repository cont
 
 A branch in the base repository is reviewed under policy loaded from the base commit. It may use configured provider credentials, validation commands, durable state, and GitHub publication when required permissions are available.
 
+### Trusted collaborator fork (opt-in)
+
+Teams that work from personal forks of a private repository can set `trust.collaboratorForks: true` in the base-branch policy. A fork pull request is then reviewed with the same capabilities as a same-repository pull request when its author holds `write`, `maintain`, or `admin` permission on the base repository. The permission is read from the GitHub collaborators API at review time; the fork's location and the pull-request event are not trusted on their own.
+
+Three independent checks apply, in order: the `/diffowl review` router reads the base-branch policy and the author's permission before dispatching; the dispatched run re-reads the live pull request and refuses if the head repository does not match the dispatch; and trust classification runs the same policy and permission lookup again before any provider credential is resolved. A failed or unavailable permission lookup fails closed to the untrusted class.
+
+The run record and outcome carry the class `trusted_collaborator_fork_pull_request` with the author's permission, so how trust was granted is auditable after the fact.
+
+Leave this off for public repositories: a fork proves nothing about its author there, and the default keeps every fork untrusted.
+
 ### Untrusted pull request
 
-Fork and Dependabot pull requests receive reduced capabilities:
+Fork (unless admitted as above) and Dependabot pull requests receive reduced capabilities:
 
 - no provider secrets;
 - no write tokens;
@@ -41,9 +51,11 @@ The Action reads `.diffowl.json` from the pull request's base revision rather th
 
 ## Credential boundary
 
-Policy contains profile names, not keys. The Action maps trusted base-policy profiles to environment credentials populated from GitHub Secrets. Fork and Dependabot contexts cannot access them.
+Policy contains profile names, not keys. The Action maps trusted base-policy profiles to environment credentials populated from GitHub Secrets. Fork and Dependabot contexts cannot access them. GitHub itself withholds secrets from `pull_request` runs of fork heads, so this holds even if classification were wrong; collaborator forks are reviewed through the request-only `workflow_dispatch` path, which is why that path re-verifies the head.
 
 Checkout uses `persist-credentials: false`. The GitHub token is supplied only to bounded state and publication operations, so validation commands cannot inherit repository credentials from the workspace.
+
+Validation commands run the pull request's own code on the runner under a scrubbed environment (`PATH`, `CI`, and no-op git config only). The provider key is held by the Action process and never enters that environment or the role sandbox. What such a command can reach is whatever else the workflow job mounted, so keep the review job to checkout plus the Action, with the provider key as its only secret, and put dependency installation in `validationCommands` (for example `npm ci --ignore-scripts`) rather than in a workflow step.
 
 ## State boundary
 

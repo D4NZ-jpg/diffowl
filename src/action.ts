@@ -30,9 +30,13 @@ import {
   recordNotAttemptedPublication,
   setReviewOutputs,
 } from "./action-publication.js";
-import { readReviewRequestPullRequest } from "./github-review-request.js";
+import { readRepositoryPermission, readReviewRequestPullRequest } from "./github-review-request.js";
 import { createHostVerificationAdapter } from "./host-verification.js";
-import { parseProjectPolicy, PROJECT_POLICY_PATH } from "./project-policy.js";
+import {
+  collaboratorForksTrusted,
+  parseProjectPolicy,
+  PROJECT_POLICY_PATH,
+} from "./project-policy.js";
 import {
   type DiffowlCredentials,
   type ReviewOutcome,
@@ -46,7 +50,12 @@ import {
   unavailableVerificationAdapter,
 } from "./review-engine.js";
 import type { ReviewRequestPullRequest } from "./review-request.js";
-import { classifyTrust } from "./trust.js";
+import {
+  classifyTrust,
+  isTrustedPullRequest,
+  type RepositoryPermission,
+  type TrustClassification,
+} from "./trust.js";
 
 export interface ActionIo {
   readFile(path: string, encoding: "utf8"): Promise<string>;
@@ -57,6 +66,7 @@ export interface ActionIo {
     pullRequestNumber: number,
   ): Promise<ReviewRequestPullRequest>;
   readCheckoutHead?(): Promise<string>;
+  readPermission?(repository: string, actor: string): Promise<RepositoryPermission>;
   setOutput(name: string, value: string): Promise<void>;
   writeJobSummary?(contents: string): Promise<void>;
   workflowRunUrl?: string;
@@ -134,6 +144,8 @@ export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
       : {
           readPullRequest: (repository: string, pullRequestNumber: number) =>
             readReviewRequestPullRequest(transport, repository, pullRequestNumber),
+          readPermission: (repository: string, actor: string) =>
+            readRepositoryPermission(transport, repository, actor),
           publishFindingDiscussion: (update: FindingDiscussionPublicationUpdate) =>
             publishFindingDiscussionUpdate(transport, update),
           publishOutcome: (
@@ -208,7 +220,7 @@ function actionPersistence(
   const stateDirectory = (
     env["INPUT_SELF-HOSTED-STATE-DIRECTORY"] ?? env.INPUT_SELF_HOSTED_STATE_DIRECTORY
   )?.trim();
-  if (env.GITHUB_ACTIONS !== "true" || trust.class !== "trusted_same_repo_pull_request") {
+  if (env.GITHUB_ACTIONS !== "true" || !isTrustedPullRequest(trust)) {
     return filesystemPersistence(stateDirectory);
   }
   if (env.RUNNER_ENVIRONMENT === "github-hosted") return githubHostedPersistence(io);
@@ -291,6 +303,39 @@ function reviewDependencies(
   };
 }
 
+/**
+ * Trust for a fork head depends on the base-branch policy and the author's
+ * base-repository permission. Both are read here, before any provider
+ * credential or validation command is reachable: the policy from the base
+ * revision so the pull request cannot grant itself trust, the permission from
+ * the collaborators API so the fork location proves nothing on its own.
+ */
+async function classifyActionTrust(
+  env: NodeJS.ProcessEnv,
+  io: ActionIo,
+  event: GitHubPullRequestEvent,
+): Promise<TrustClassification> {
+  const { pull_request: pullRequest, repository } = event;
+  const base = {
+    type: "github_pull_request" as const,
+    repository: repository.full_name,
+    headRepository: pullRequest.head.repo.full_name,
+    actor: pullRequest.user?.login,
+  };
+  if (pullRequest.head.repo.full_name === repository.full_name) return classifyTrust(base);
+  const policy = parseProjectPolicy(await io.readPolicy(pullRequest.base.sha, PROJECT_POLICY_PATH));
+  const forksTrusted = policy.valid && collaboratorForksTrusted(policy.policy);
+  const author = pullRequest.user?.login;
+  if (!forksTrusted || author === undefined || io.readPermission === undefined) {
+    return classifyTrust({ ...base, collaboratorForksTrusted: forksTrusted });
+  }
+  return classifyTrust({
+    ...base,
+    collaboratorForksTrusted: true,
+    authorPermission: await io.readPermission(repository.full_name, author),
+  });
+}
+
 // oxlint-disable-next-line complexity, max-lines-per-function
 export async function runAction(
   env: NodeJS.ProcessEnv,
@@ -308,12 +353,7 @@ export async function runAction(
     );
   }
 
-  const trust = classifyTrust({
-    type: "github_pull_request",
-    repository: repository.full_name,
-    headRepository: pullRequest.head.repo.full_name,
-    actor: pullRequest.user?.login,
-  });
+  const trust = await classifyActionTrust(env, io, event);
 
   const persistenceSelection = actionPersistence(env, trust, io);
   if (persistenceSelection.configurationReason !== undefined) {

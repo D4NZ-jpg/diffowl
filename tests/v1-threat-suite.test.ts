@@ -9,7 +9,11 @@ import { afterEach, expect, it } from "vitest";
 import { createActionIo, runAction } from "../src/action.js";
 import { publishReviewOutcome, type GitHubRequest } from "../src/github-publication.js";
 import { parseProjectPolicy } from "../src/project-policy.js";
-import { routeReviewRequest, type ReviewRequestIo } from "../src/review-request.js";
+import {
+  type RepositoryPermission,
+  routeReviewRequest,
+  type ReviewRequestIo,
+} from "../src/review-request.js";
 import {
   FileSystemReviewPersistenceStore,
   runReview,
@@ -168,6 +172,153 @@ it("threat: fork and Dependabot restrictions deny secrets, validation, privilege
       },
     });
   }
+});
+
+it("threat: collaborator forks are trusted only by base-branch policy plus verified author permission", async () => {
+  const forkEvent = pullRequestEvent({ headRepository: "alice/review-target", actor: "alice" });
+  const forkPolicy = policyWith({ trust: { collaboratorForks: true } });
+  const run = (policy: string, permission: RepositoryPermission | undefined) => {
+    const lookups: string[] = [];
+    return runAction(
+      { GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: "event.json" },
+      {
+        readFile: async () => JSON.stringify(forkEvent),
+        readDiff: async () => representativeDiff,
+        readPolicy: async () => policy,
+        setOutput: async () => undefined,
+        executeRole: async (request) => emptyRoleResult(request),
+        ...(permission === undefined
+          ? {}
+          : {
+              readPermission: async (_repository: string, actor: string) => {
+                lookups.push(actor);
+                return permission;
+              },
+            }),
+      },
+    ).then((outcome) => ({ outcome, lookups }));
+  };
+
+  // Default policy: a fork stays untrusted and the author's permission is never consulted.
+  const strict = await run(basePolicy, "admin");
+  expect(strict.outcome.trust.class).toBe("untrusted_pull_request");
+  expect(strict.lookups).toEqual([]);
+
+  // Policy opts in, but the author only has read: still untrusted.
+  const reader = await run(forkPolicy, "read");
+  expect(reader.outcome.trust.class).toBe("untrusted_pull_request");
+  expect(reader.lookups).toEqual(["alice"]);
+
+  // Policy opts in and the lookup is unavailable: fail closed.
+  const unknown = await run(forkPolicy, undefined);
+  expect(unknown.outcome.trust.class).toBe("untrusted_pull_request");
+
+  // Policy opts in and the author has write: same capabilities as a same-repo PR,
+  // recorded under a distinct class so the grant is auditable.
+  const writer = await run(forkPolicy, "write");
+  expect(writer.outcome.trust).toMatchObject({
+    class: "trusted_collaborator_fork_pull_request",
+    authorPermission: "write",
+    capabilities: {
+      validationCommands: "sandboxed",
+      secrets: "provider_credentials_only",
+      privilegedTools: "denied",
+      publishing: "denied",
+    },
+  });
+  expect(writer.outcome.type).not.toBe("partial_coverage");
+});
+
+it("threat: a dispatch that misstates the head repository is refused before any work", async () => {
+  const outcome = await runAction(
+    {
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      INPUT_REPOSITORY: reviewedPullRequest.repository,
+      "INPUT_PULL-REQUEST-NUMBER": String(reviewedPullRequest.number),
+      "INPUT_BASE-SHA": reviewedPullRequest.baseSha,
+      "INPUT_HEAD-SHA": reviewedPullRequest.headSha,
+      "INPUT_REVIEW-REQUEST-EVENT-ID": "evt-1",
+      // Claims the head is in the base repository while the live PR says it is a fork.
+      "INPUT_HEAD-REPOSITORY": reviewedPullRequest.repository,
+    },
+    {
+      readFile: async () => "",
+      readDiff: async () => representativeDiff,
+      readPolicy: async () => policyWith({ trust: { collaboratorForks: true } }),
+      setOutput: async () => undefined,
+      readCheckoutHead: async () => reviewedPullRequest.headSha,
+      readPullRequest: async () => ({
+        number: reviewedPullRequest.number,
+        author: "alice",
+        baseSha: reviewedPullRequest.baseSha,
+        headSha: reviewedPullRequest.headSha,
+        baseRepository: reviewedPullRequest.repository,
+        headRepository: "alice/review-target",
+      }),
+      readPermission: async () => "admin",
+      executeRole: async () => {
+        throw new Error("must not run a role");
+      },
+    },
+  );
+  expect(outcome).toMatchObject({
+    type: "policy_skip",
+    reason: expect.stringContaining("does not match the latest pull-request head"),
+  });
+});
+
+it("threat: the router refuses fork requests without a lookup unless policy admits collaborator forks", async () => {
+  const forkPullRequest = {
+    number: reviewedPullRequest.number,
+    author: "alice",
+    baseSha: reviewedPullRequest.baseSha,
+    headSha: reviewedPullRequest.headSha,
+    baseRepository: reviewedPullRequest.repository,
+    headRepository: "alice/review-target",
+  };
+  const request = async (policy: string, permission: RepositoryPermission) => {
+    const lookups: string[] = [];
+    const dispatches: string[] = [];
+    const result = await routeReviewRequest(
+      {
+        eventId: `evt-${policy.length}-${permission}`,
+        repository: reviewedPullRequest.repository,
+        defaultBranch: "main",
+        pullRequestNumber: reviewedPullRequest.number,
+        actor: "alice",
+        body: "/diffowl review",
+      },
+      {
+        readPullRequest: async () => forkPullRequest,
+        readPermission: async (_repository, actor) => {
+          lookups.push(actor);
+          return permission;
+        },
+        readPolicy: async () => policy,
+        addEyes: async () => undefined,
+        replyOnce: async () => undefined,
+        dispatchReview: async (dispatch) => {
+          dispatches.push(dispatch.headRepository);
+        },
+      },
+      await routerPersistence(),
+    );
+    return { result, lookups, dispatches };
+  };
+
+  const strict = await request(basePolicy, "admin");
+  expect(strict.result.type).toBe("refused");
+  expect(strict.lookups).toEqual([]);
+  expect(strict.dispatches).toEqual([]);
+
+  const reader = await request(policyWith({ trust: { collaboratorForks: true } }), "read");
+  expect(reader.result.type).toBe("refused");
+  expect(reader.dispatches).toEqual([]);
+
+  const writer = await request(policyWith({ trust: { collaboratorForks: true } }), "write");
+  expect(writer.result.type).toBe("dispatched");
+  expect(writer.lookups).toEqual(["alice"]);
+  expect(writer.dispatches).toEqual(["alice/review-target"]);
 });
 
 it("threat: secret tokens are not exposed to the engine or untrusted publishers", async () => {

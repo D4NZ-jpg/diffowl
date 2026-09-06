@@ -17,6 +17,9 @@ on:
       head-sha:
         required: true
         type: string
+      head-repository:
+        required: false
+        type: string
       review-request-event-id:
         required: true
         type: string
@@ -48,6 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: ${{ inputs.head-repository || github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ inputs.head-sha || github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
@@ -58,6 +62,7 @@ jobs:
           pull-request-number: ${{ inputs.pull-request-number }}
           base-sha: ${{ inputs.base-sha }}
           head-sha: ${{ inputs.head-sha }}
+          head-repository: ${{ inputs.head-repository }}
           review-request-event-id: ${{ inputs.review-request-event-id }}
           command-work-type: ${{ inputs.command-work-type }}
           finding-fingerprint: ${{ inputs.finding-fingerprint }}

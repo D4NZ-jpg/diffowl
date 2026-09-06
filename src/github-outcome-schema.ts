@@ -38,6 +38,14 @@ const trustSchema = z.discriminatedUnion("class", [
     }),
   }),
   z.strictObject({
+    class: z.literal("trusted_collaborator_fork_pull_request"),
+    authorPermission: z.enum(["write", "maintain", "admin"]),
+    capabilities: deniedCapabilities.extend({
+      validationCommands: z.literal("sandboxed"),
+      secrets: z.literal("provider_credentials_only"),
+    }),
+  }),
+  z.strictObject({
     class: z.literal("untrusted_pull_request"),
     source: z.enum(["fork", "dependabot"]),
     capabilities: deniedCapabilities,
@@ -125,6 +133,7 @@ const projectPolicySchema = z.strictObject({
   presentation: z
     .strictObject({ advisories: z.enum(["off", "summary", "inline"]).optional() })
     .optional(),
+  trust: z.strictObject({ collaboratorForks: z.boolean().optional() }).optional(),
 });
 
 const locationSchema = z.strictObject({

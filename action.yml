@@ -16,6 +16,9 @@ inputs:
   head-sha:
     description: The verified head revision for an authenticated Review request workflow dispatch.
     required: false
+  head-repository:
+    description: The verified head repository for an authenticated Review request workflow dispatch. Equals the base repository unless policy admits a collaborator fork.
+    required: false
   review-request-event-id:
     description: The durable command event identity authorizing a Review or Finding discussion workflow dispatch.
     required: false

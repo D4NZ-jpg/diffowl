@@ -84,6 +84,7 @@ function io(effects: string[], overrides: Partial<FindingCommandIo> = {}): Findi
       headRepository: "example/repository",
     }),
     readPolicy: async () => JSON.stringify(projectPolicy()),
+    readPermission: async () => "read",
     readReviewComment: async (_repository, commentId) => comments.get(commentId)!,
     addEyes: async (eventId) => {
       effects.push(`eyes:${eventId}`);

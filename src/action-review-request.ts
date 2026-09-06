@@ -27,6 +27,8 @@ interface DispatchInputs {
   pullRequestNumber: number;
   baseSha: string;
   headSha: string;
+  /** Defaults to `repository`; a router that admitted a collaborator fork sends the fork here. */
+  headRepository: string;
 }
 
 function actionInput(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -42,16 +44,29 @@ function dispatchInputs(env: NodeJS.ProcessEnv): DispatchInputs | undefined {
   const pullRequestNumber = Number(actionInput(env, "PULL-REQUEST-NUMBER"));
   const baseSha = actionInput(env, "BASE-SHA")?.trim();
   const headSha = actionInput(env, "HEAD-SHA")?.trim();
+  const headRepositoryInput = actionInput(env, "HEAD-REPOSITORY")?.trim();
   if (![repository, baseSha, headSha].every(nonEmpty)) return undefined;
   if (!Number.isInteger(pullRequestNumber) || pullRequestNumber <= 0) return undefined;
-  return { repository: repository!, pullRequestNumber, baseSha: baseSha!, headSha: headSha! };
+  return {
+    repository: repository!,
+    pullRequestNumber,
+    baseSha: baseSha!,
+    headSha: headSha!,
+    headRepository: nonEmpty(headRepositoryInput) ? headRepositoryInput : repository!,
+  };
 }
 
+/**
+ * The dispatch must name the live pull request exactly, including its head
+ * repository. Whether a fork head is then trusted is decided by
+ * classifyTrust from base-branch policy and the author's permission; this
+ * guard only refuses dispatches that lie about where the head lives.
+ */
 function matchesDispatch(pullRequest: ReviewRequestPullRequest, inputs: DispatchInputs): boolean {
   return (
     pullRequest.number === inputs.pullRequestNumber &&
     pullRequest.baseRepository === inputs.repository &&
-    pullRequest.headRepository === inputs.repository &&
+    pullRequest.headRepository === inputs.headRepository &&
     pullRequest.baseSha === inputs.baseSha &&
     pullRequest.headSha === inputs.headSha
   );
@@ -82,7 +97,8 @@ async function resolveWorkflowDispatch(
     return {
       valid: false,
       type: "policy_skip",
-      reason: "The workflow dispatch does not match the latest same-repository head.",
+      reason:
+        "The workflow dispatch does not match the latest pull-request head and head repository.",
     };
   }
   if ((await io.readCheckoutHead()) !== inputs.headSha) {

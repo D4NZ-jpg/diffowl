@@ -12,7 +12,11 @@ import {
   githubRecord as record,
   githubText as text,
 } from "./github-response.js";
-import { readReviewRequestPullRequest, workflowDispatchRequest } from "./github-review-request.js";
+import {
+  readRepositoryPermission,
+  readReviewRequestPullRequest,
+  workflowDispatchRequest,
+} from "./github-review-request.js";
 
 function reviewComment(value: unknown): FindingCommandReviewComment {
   const response = record(value, "GitHub pull-request review comment");
@@ -487,6 +491,7 @@ export function createGitHubFindingCommandIo(
     readPullRequest: (repository, pullRequestNumber) =>
       readReviewRequestPullRequest(transport, repository, pullRequestNumber),
     readPolicy: options.readPolicy,
+    readPermission: (repository, actor) => readRepositoryPermission(transport, repository, actor),
     readReviewComment: async (repository, commentId) =>
       reviewComment(
         await transport({

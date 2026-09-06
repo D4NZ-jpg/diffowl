@@ -21,6 +21,12 @@ import type {
   ReviewPersistenceStore,
   ReviewPersistenceTransaction,
 } from "./review-engine.js";
+import { isTrustedPullRequest, type TrustClassification } from "./trust.js";
+
+const trustedPullRequestClasses = new Set<TrustClassification["class"]>([
+  "trusted_same_repo_pull_request",
+  "trusted_collaborator_fork_pull_request",
+]);
 
 interface PublicationAuthority {
   version: 1;
@@ -143,7 +149,7 @@ async function candidateAuthority(
     revision?.repository !== repository ||
     revision.number !== pullRequestNumber ||
     revision.headSha !== headSha ||
-    record.trustClass !== "trusted_same_repo_pull_request"
+    !trustedPullRequestClasses.has(record.trustClass)
   ) {
     throw new PublicationRefusalError("The verified run record does not match publication.");
   }
@@ -308,10 +314,7 @@ export async function publishFindingDiscussionActionOutcome(
   persistence: ReviewPersistenceStore,
 ): Promise<void> {
   await setReviewOutputs(io, outcome);
-  if (
-    io.publishFindingDiscussion === undefined ||
-    outcome.trust.class !== "trusted_same_repo_pull_request"
-  ) {
+  if (io.publishFindingDiscussion === undefined || !isTrustedPullRequest(outcome.trust)) {
     await recordNotAttemptedPublication(io, outcome);
     return;
   }
@@ -352,7 +355,7 @@ export async function publishActionOutcome(
   persistence: ReviewPersistenceStore | undefined,
 ): Promise<void> {
   await setReviewOutputs(io, outcome);
-  if (io.publishOutcome === undefined || outcome.trust.class !== "trusted_same_repo_pull_request") {
+  if (io.publishOutcome === undefined || !isTrustedPullRequest(outcome.trust)) {
     await recordNotAttemptedPublication(io, outcome);
     return;
   }
