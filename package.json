@@ -1,6 +1,6 @@
 {
   "name": "review-owl",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-hostable, evidence-backed pull-request review. Review engine, GitHub Action, and local CLI.",
   "keywords": [
     "ai",
