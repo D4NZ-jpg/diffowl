@@ -347,6 +347,41 @@ it("threat: secret tokens are not exposed to the engine or untrusted publishers"
   expect(outcome.type).toBe("partial_coverage");
 });
 
+it("threat: credential-store secrets are consumed before any role or validation command can run", async () => {
+  const env: NodeJS.ProcessEnv = {
+    GITHUB_EVENT_NAME: "pull_request",
+    GITHUB_EVENT_PATH: "event.json",
+    GITHUB_TOKEN: "publisher-secret",
+    DIFFOWL_CREDENTIAL_STORE_URL: "postgres://runner:store-secret@db.example/creds",
+    DIFFOWL_CREDENTIAL_STORE_KEY: "team-row",
+    DIFFOWL_CREDENTIAL_STORE_SECRET: "encryption-secret",
+  };
+  const io = createActionIo(env);
+
+  // All three are gone from the process environment the moment the Action io
+  // exists, which is before the engine, a role sandbox, or a validation
+  // command can observe it. The default profile is the shared store.
+  for (const name of [
+    "GITHUB_TOKEN",
+    "DIFFOWL_CREDENTIAL_STORE_URL",
+    "DIFFOWL_CREDENTIAL_STORE_KEY",
+    "DIFFOWL_CREDENTIAL_STORE_SECRET",
+  ]) {
+    expect(env[name]).toBeUndefined();
+  }
+  expect(io.credentialProfiles).toMatchObject({
+    default: { type: "shared", key: "team-row" },
+  });
+  await io.close?.();
+
+  // Without a store URL the default profile is env, and nothing is consumed
+  // beyond the GitHub token.
+  const plain: NodeJS.ProcessEnv = { GITHUB_TOKEN: "t", ANTHROPIC_API_KEY: "k" };
+  const plainIo = createActionIo(plain);
+  expect(plainIo.credentialProfiles).toEqual({ default: { type: "env" } });
+  expect(plain.ANTHROPIC_API_KEY).toBe("k");
+});
+
 it("threat: malicious commands and the removed rerun alias have no effects", async () => {
   const persistence = await routerPersistence();
   const io = {

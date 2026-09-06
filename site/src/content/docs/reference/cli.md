@@ -24,15 +24,31 @@ node dist/cli.js review \
 
 ## Options
 
-| Option                     | Required | Meaning                                                                        |
-| -------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `--input <path>`           | yes      | Path to the pull-request input JSON.                                           |
-| `--policy <path>`          | yes      | Path to a local project-policy JSON file.                                      |
-| `--state-directory <path>` | no       | Persist and inspect local run records and finding-ledger state.                |
-| `--dry-run`                | no       | Run locally without publishing. This is the default.                           |
-| `--publish`                | no       | Request publishing mode; the `local_cli` trust class still denies publication. |
+| Option                       | Required | Meaning                                                                                                                                                        |
+| ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--input <path>`             | yes      | Path to the pull-request input JSON.                                                                                                                           |
+| `--policy <path>`            | yes      | Path to a local project-policy JSON file.                                                                                                                      |
+| `--state-directory <path>`   | no       | Persist and inspect local run records and finding-ledger state.                                                                                                |
+| `--dry-run`                  | no       | Run locally without publishing. This is the default.                                                                                                           |
+| `--publish`                  | no       | Request publishing mode; the `local_cli` trust class still denies publication.                                                                                 |
+| `--repository <path>`        | no       | Checkout at the pull-request head. Roles run inside it and may read files; the verifier may run policy validation commands there. Omit for a diff-only review. |
+| `--credentials <local\|env>` | no       | Credential source for the `default` profile. `local` (default) reads the local agent directory; `env` reads `*_API_KEY` and `*_BASE_URL` variables.            |
 
 Unknown arguments and missing option values print usage on stderr and exit with code 2.
+
+`--repository` runs the roles as the invoking user in a host sandbox that restricts file paths but not the shell. Only use it on pull requests you have read; see the trust model.
+
+## `diffowl credentials`
+
+Manages the shared credential store used by the Action for subscription logins. Reads `DIFFOWL_CREDENTIAL_STORE_URL` and, optionally, `DIFFOWL_CREDENTIAL_STORE_SECRET` from the environment.
+
+| Command                                                            | Meaning                                                                                          |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `credentials sql`                                                  | Print the `CREATE TABLE` statement. Run it with a role that has DDL; the runner role should not. |
+| `credentials push --provider <id> [--key <row>] [--agent-dir <p>]` | Copy the named provider entries from the local agent auth file into the row. Nothing is printed. |
+| `credentials status [--key <row>]`                                 | List provider ids and token expiry in the row, without token material.                           |
+
+See the credentials guide for setup.
 
 ## Exit codes
 

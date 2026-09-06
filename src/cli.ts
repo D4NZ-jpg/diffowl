@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { runCredentialsCli } from "./cli-credentials.js";
 import { createHostVerificationAdapter } from "./host-verification.js";
 import {
   type DiffowlCredentials,
@@ -90,6 +91,7 @@ interface CliOptions {
 function usage(): string {
   return [
     "Usage: diffowl review --input <pull-request.json> --policy <local-policy.json> [options]",
+    "       diffowl credentials <sql|push|status> ...   (shared credential store; see --help there)",
     "",
     "Options:",
     "  --state-directory <path>  Persist and inspect local run records and Finding ledger state.",
@@ -260,6 +262,7 @@ function reviewDependencies(options: CliOptions, io: CliIo): ReviewDependencies 
 }
 
 export async function runCli(args: readonly string[], io: CliIo = processIo): Promise<number> {
+  if (args[0] === "credentials") return runCredentialsCli(args.slice(1));
   const options = optionsFrom(args);
   if (typeof options === "string") {
     io.stderr(`${options}\n`);

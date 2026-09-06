@@ -35,6 +35,47 @@ The Action resolves the `default` profile from the workflow environment. Pass pr
 
 Add whichever variables your configured providers require. `GITHUB_TOKEN` is consumed by the adapter for GitHub API work and removed from the environment before provider execution.
 
+## GitHub Action: shared credential store (subscriptions)
+
+An API key is a static secret. A subscription login is an OAuth token pair that expires and must be refreshed, and two runners refreshing at once would clobber each other. For that case the Action can take its `default` profile from a shared, lockable store backed by Postgres, using [`@runcell/postgres-credentials`](https://www.npmjs.com/package/@runcell/postgres-credentials). Any Postgres works, including Supabase, Neon, or RDS through a pooler in transaction mode.
+
+Set three variables instead of provider keys:
+
+```yaml
+- uses: D4NZ-jpg/diffowl@v0
+  env:
+    GITHUB_TOKEN: ${{ github.token }}
+    DIFFOWL_CREDENTIAL_STORE_URL: ${{ secrets.DIFFOWL_CREDENTIAL_STORE_URL }}
+    DIFFOWL_CREDENTIAL_STORE_KEY: diffowl-default
+    DIFFOWL_CREDENTIAL_STORE_SECRET: ${{ secrets.DIFFOWL_CREDENTIAL_STORE_SECRET }}
+```
+
+| Variable                          | Meaning                                                                                                 |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `DIFFOWL_CREDENTIAL_STORE_URL`    | Postgres connection string. Use a role with `SELECT`, `INSERT`, `UPDATE` on the table and nothing else. |
+| `DIFFOWL_CREDENTIAL_STORE_KEY`    | Row key holding the provider auth blob. Default `diffowl-default`.                                      |
+| `DIFFOWL_CREDENTIAL_STORE_SECRET` | Optional. Encrypts blobs at rest with AES-256-GCM. Losing it loses the stored credentials.              |
+
+All three are consumed and deleted from the process environment when the Action starts, before any role sandbox or validation command exists. The row is read and refreshed inside a single transaction under `SELECT ... FOR UPDATE`, so concurrent runs queue rather than overwrite a rotated refresh token.
+
+One-time setup, from your own machine:
+
+```bash
+# 1. Create the table with a role that has DDL (the runner role should not).
+npx review-owl credentials sql | psql "$ADMIN_DATABASE_URL"
+
+# 2. Copy your local provider login into the row. Only the named providers are
+#    sent; nothing is printed. Reads ~/.pi/agent/auth.json by default.
+export DIFFOWL_CREDENTIAL_STORE_URL="postgres://..."
+export DIFFOWL_CREDENTIAL_STORE_SECRET="..."   # same value as the repository secret
+npx review-owl credentials push --provider anthropic
+
+# 3. Check what the row holds, without secrets.
+npx review-owl credentials status
+```
+
+The runner's database role should be scoped to that one table. The URL is a secret with the same blast radius as the login it protects: treat it like the provider key it replaces. Using a personal subscription from CI is subject to your provider's terms.
+
 ## Local CLI: local credentials
 
 The CLI's default profile is `local`, which resolves through local RunCell credential configuration. Supported sources include provider environment variables and stored Codex or Claude logins on the developer machine.

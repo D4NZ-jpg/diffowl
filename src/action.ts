@@ -11,6 +11,7 @@ import {
 import type { GitHubPullRequestEvent } from "./action-event.js";
 import { runFindingDiscussionWork } from "./finding-discussion-work.js";
 import { addedLinesFromDiff } from "./github-diff.js";
+import { resolveActionCredentials } from "./action-credentials.js";
 import { readGitFileAtRevision } from "./git-read.js";
 import {
   publishFindingDiscussionUpdate,
@@ -79,6 +80,8 @@ export interface ActionIo {
     authorization: PublicationAuthorization,
   ): Promise<PublicationReceipt>;
   credentialProfiles?: Readonly<Record<string, DiffowlCredentials>>;
+  /** Releases resources held for the run, such as a credential-store pool. */
+  close?(): Promise<void>;
   executeRole?(request: RoleExecutionRequest): Promise<RoleExecutionResult>;
   verificationAdapter?: VerificationAdapter;
   gitPersistence?: ReviewPersistenceStore;
@@ -113,9 +116,12 @@ function readGitHead(): Promise<string> {
 export function createActionIo(env: NodeJS.ProcessEnv): ActionIo {
   const token = env.GITHUB_TOKEN;
   delete env.GITHUB_TOKEN;
+  const credentials = resolveActionCredentials(env);
   const transport =
     token === undefined ? undefined : createGitHubTransport(token, env.GITHUB_API_URL);
   return {
+    credentialProfiles: credentials.profiles,
+    close: credentials.close,
     readFile,
     readDiff: readGitDiff,
     readPolicy: readGitFileAtRevision,

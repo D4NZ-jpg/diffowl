@@ -53,12 +53,15 @@
     "prepublishOnly": "npm run check"
   },
   "dependencies": {
+    "@runcell/postgres-credentials": "^0.2.0",
     "minimatch": "^10.2.6",
+    "pg": "^8.23.0",
     "runcell": "^1.9.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "@types/pg": "^8.23.1",
     "esbuild": "^0.28.2",
     "jscpd": "^5.0.14",
     "oxfmt": "^0.63.0",
