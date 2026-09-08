@@ -14,3 +14,7 @@ site/dist/
 .env.*
 !.env.example
 .playwright-mcp/
+
+# local prompt scratch files
+prompt-*.txt
+prmopt.txt
