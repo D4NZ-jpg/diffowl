@@ -5,11 +5,7 @@
     "review-request/dist/**",
     "coverage/**",
     ".pi/**",
-    ".agents/**",
     "docs/**",
-    "research/**",
-    "AGENTS.md",
-    "CONTEXT.md",
     "site/mockups/**",
     ".playwright-mcp/**"
   ]

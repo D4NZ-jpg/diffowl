@@ -18,3 +18,8 @@ site/dist/
 # local prompt scratch files
 prompt-*.txt
 prmopt.txt
+
+# local agent tooling
+.agents/
+AGENTS.md
+skills-lock.json

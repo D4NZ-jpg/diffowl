@@ -261,4 +261,6 @@ The project uses TypeScript, Vitest, oxlint, oxfmt, and jscpd. Bundled Action fi
 | [`src/finding-ledger.ts`](src/finding-ledger.ts)                           | Finding lifecycle reconciliation.             |
 | [`docs/specs/diffowl-v1.md`](docs/specs/diffowl-v1.md)                     | Canonical V1 specification.                   |
 | [`docs/adr`](docs/adr)                                                     | Architecture decision records.                |
+| [`docs/glossary.md`](docs/glossary.md)                                     | Domain vocabulary used across code and docs.  |
+| [`scripts/benchmark`](scripts/benchmark)                                   | Reproducible review-quality benchmark.        |
 | [`examples/representative-repository`](examples/representative-repository) | End-to-end repository setup example.          |

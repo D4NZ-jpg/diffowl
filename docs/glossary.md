@@ -1,4 +1,4 @@
-# Domain glossary
+# Glossary
 
 ## Diffowl
 

@@ -156,7 +156,7 @@ it("installs a trusted issue-comment router and one canonical review workflow", 
   expect(router).toContain("pull-requests: write");
   expect(router).toContain("issues: write");
   expect(router).toContain("persist-credentials: false");
-  expect(router).toContain("uses: D4NZ-jpg/diffowl/review-request@main");
+  expect(router).toContain("uses: D4NZ-jpg/diffowl/review-request@v0");
   expect(router).not.toContain("OPENAI_API_KEY");
   expect(router).not.toContain("ANTHROPIC_API_KEY");
 
