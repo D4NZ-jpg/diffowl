@@ -1,8 +1,9 @@
 name: Review OWL
 
+# Request-only: nothing runs on pull_request events. Comment `/diffowl review`
+# on a pull request; review-request.yml verifies the actor and dispatches
+# this workflow at the verified head revision.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       repository:
@@ -37,7 +38,7 @@ on:
         type: string
 
 concurrency:
-  group: review-owl-${{ inputs.pull-request-number || github.event.pull_request.number }}
+  group: review-owl-${{ inputs.pull-request-number }}
   cancel-in-progress: true
 
 permissions:
@@ -48,13 +49,20 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          repository: ${{ inputs.head-repository || github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ inputs.head-sha || github.event.pull_request.head.sha }}
+          # The router verified head-repository against the live pull request;
+          # it equals this repository unless policy admitted a collaborator fork.
+          repository: ${{ inputs.head-repository || github.repository }}
+          ref: ${{ inputs.head-sha }}
           fetch-depth: 0
           persist-credentials: false
+      # No dependency install or other steps here: anything that runs the
+      # pull request's own scripts belongs in .diffowl.json validationCommands,
+      # where it executes under the engine's scrubbed environment. This job
+      # carries exactly one secret, the provider key.
       - id: review-owl
         uses: D4NZ-jpg/diffowl@v0
         with:
@@ -70,5 +78,9 @@ jobs:
           finding-root-comment-id: ${{ inputs.finding-root-comment-id }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Shared credential store (Supabase Postgres). The Action consumes these
+          # three variables before any role or validation command runs; the row
+          # holds the provider OAuth blob and is refreshed under a row lock.
+          DIFFOWL_CREDENTIAL_STORE_URL: ${{ secrets.DIFFOWL_CREDENTIAL_STORE_URL }}
+          DIFFOWL_CREDENTIAL_STORE_KEY: diffowl-default
+          DIFFOWL_CREDENTIAL_STORE_SECRET: ${{ secrets.DIFFOWL_CREDENTIAL_STORE_SECRET }}
