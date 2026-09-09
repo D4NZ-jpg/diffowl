@@ -1,5 +1,6 @@
 /* oxlint-disable max-lines, max-lines-per-function */
 import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { assertObjectId, assertRepositoryPath } from "./git-args.js";
 import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath, sep } from "node:path";
@@ -192,7 +193,9 @@ export const readGitFileAtHead: VerificationAdapter["readRepositoryFile"] = (req
       reject(new Error("Repository evidence read was aborted."));
       return;
     }
-    const child = spawn("git", ["show", `${request.headSha}:${request.path}`], {
+    assertObjectId(request.headSha, "head revision");
+    assertRepositoryPath(request.path, "repository evidence path");
+    const child = spawn("git", ["show", "--no-color", `${request.headSha}:${request.path}`, "--"], {
       cwd: process.cwd(),
       env: commandEnvironment(),
       detached: process.platform !== "win32",

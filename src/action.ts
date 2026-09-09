@@ -12,6 +12,7 @@ import type { GitHubPullRequestEvent } from "./action-event.js";
 import { runFindingDiscussionWork } from "./finding-discussion-work.js";
 import { addedLinesFromDiff } from "./github-diff.js";
 import { resolveActionCredentials } from "./action-credentials.js";
+import { assertObjectId } from "./git-args.js";
 import { readGitFileAtRevision } from "./git-read.js";
 import {
   publishFindingDiscussionUpdate,
@@ -87,11 +88,13 @@ export interface ActionIo {
   gitPersistence?: ReviewPersistenceStore;
 }
 
-function readGitDiff(baseSha: string, headSha: string): Promise<string> {
+async function readGitDiff(baseSha: string, headSha: string): Promise<string> {
+  assertObjectId(baseSha, "base revision");
+  assertObjectId(headSha, "head revision");
   return new Promise((resolve, reject) => {
     execFile(
       "git",
-      ["diff", "--no-ext-diff", baseSha, headSha, "--"],
+      ["diff", "--no-ext-diff", "--no-color", baseSha, headSha, "--"],
       { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 },
       (error, stdout) => {
         if (error) {

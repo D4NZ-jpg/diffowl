@@ -1,10 +1,17 @@
 import { execFile } from "node:child_process";
 
-export function readGitFileAtRevision(revision: string, path: string): Promise<string | undefined> {
+import { assertObjectId, assertRepositoryPath } from "./git-args.js";
+
+export async function readGitFileAtRevision(
+  revision: string,
+  path: string,
+): Promise<string | undefined> {
+  assertObjectId(revision);
+  assertRepositoryPath(path);
   return new Promise((resolve, reject) => {
     execFile(
       "git",
-      ["show", `${revision}:${path}`],
+      ["show", "--no-color", `${revision}:${path}`, "--"],
       { encoding: "utf8", maxBuffer: 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error === null) {
