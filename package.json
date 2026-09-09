@@ -69,6 +69,9 @@
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
   },
+  "overrides": {
+    "@earendil-works/pi-coding-agent": "0.85.1"
+  },
   "engines": {
     "node": ">=22.0.0"
   }
