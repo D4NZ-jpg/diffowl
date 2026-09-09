@@ -62,7 +62,10 @@ export default defineConfig({
         },
         {
           label: "Security",
-          items: [{ label: "Trust model", slug: "security/trust-model" }],
+          items: [
+            { label: "Trust model", slug: "security/trust-model" },
+            { label: "Security audit", slug: "security/audit" },
+          ],
         },
         {
           label: "Reference",
