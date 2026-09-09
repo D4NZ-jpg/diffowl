@@ -36,13 +36,22 @@ function normalizedCommand(value: string): FindingDiscussionCommand {
     : (value.toLowerCase() as FindingDiscussionCommand);
 }
 
+/**
+ * Author-supplied context travels through a workflow_dispatch input and into a
+ * role prompt. Bounded here so neither GitHub's dispatch limit nor the model
+ * context is the thing that enforces it.
+ */
+export const FINDING_COMMAND_BODY_MAX_CHARS = 4_000;
+
 function bodyForEvent(
   command: FindingDiscussionCommand,
   body: string | undefined,
 ): string | undefined {
   const requiresBody = ["rebut", "suppress", "ignore", "reassess"].includes(command);
   if (body === undefined || body === "") return requiresBody ? undefined : "";
-  return body;
+  return body.length > FINDING_COMMAND_BODY_MAX_CHARS
+    ? `${body.slice(0, FINDING_COMMAND_BODY_MAX_CHARS)}\u2026`
+    : body;
 }
 
 export function parseFindingDiscussionCommandBody(
