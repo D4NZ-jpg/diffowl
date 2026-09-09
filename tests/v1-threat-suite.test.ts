@@ -7,7 +7,12 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import { createActionIo, runAction } from "../src/action.js";
-import { publishReviewOutcome, type GitHubRequest } from "../src/github-publication.js";
+import {
+  createGitHubTransport,
+  publishReviewOutcome,
+  type GitHubRequest,
+} from "../src/github-publication.js";
+import { GitHubScopeError } from "../src/github-scope.js";
 import { parseProjectPolicy } from "../src/project-policy.js";
 import {
   type RepositoryPermission,
@@ -639,4 +644,65 @@ it("threat: poisoned model output remains bounded data and cannot become executi
     shown.requests.every((request) => request.path.startsWith(`/repos/${target.repository}/`)),
   ).toBe(true);
   expect(existsSync("/tmp/diffowl-pwned")).toBe(false);
+});
+
+it("threat: the token cannot reach anything outside the pull-request surface, whatever the permission grant", async () => {
+  const originalFetch = globalThis.fetch;
+  const reached: string[] = [];
+  globalThis.fetch = async (url) => {
+    reached.push(String(url));
+    return new Response("{}", { status: 200 });
+  };
+  try {
+    const transport = createGitHubTransport("token-with-contents-write", {
+      repository: reviewedPullRequest.repository,
+      role: "review",
+    });
+    // Everything a compromised call site or poisoned output might try with a
+    // contents:write + pull-requests:write token, on this repo or another.
+    const attempts: GitHubRequest[] = [
+      { method: "POST", path: `/repos/${reviewedPullRequest.repository}/git/refs`, body: {} },
+      {
+        method: "PATCH",
+        path: `/repos/${reviewedPullRequest.repository}/git/refs/heads/main`,
+        body: {},
+      },
+      { method: "POST", path: `/repos/${reviewedPullRequest.repository}/releases`, body: {} },
+      {
+        method: "POST",
+        path: `/repos/${reviewedPullRequest.repository}/pulls/${reviewedPullRequest.number}/merge`,
+        body: {},
+      },
+      {
+        method: "POST",
+        path: `/repos/${reviewedPullRequest.repository}/pulls/${reviewedPullRequest.number}/reviews`,
+        body: { event: "APPROVE" },
+      },
+      {
+        method: "POST",
+        path: `/repos/${reviewedPullRequest.repository}/actions/workflows/deploy.yml/dispatches`,
+        body: {},
+      },
+      { method: "GET", path: `/repos/${reviewedPullRequest.repository}/actions/secrets` },
+      { method: "GET", path: "/repos/someone-else/private-repo/pulls/1" },
+      { method: "GET", path: "/user/repos" },
+      {
+        method: "POST",
+        path: "/graphql",
+        body: { query: 'mutation M { deleteRef(input: {refId: "x"}) { clientMutationId } }' },
+      },
+    ];
+    for (const attempt of attempts) {
+      // The APPROVE body is not refused by scope (the review endpoint is allowed);
+      // the publisher never sends it, and that is pinned by the publication tests.
+      if (attempt.path.endsWith("/reviews")) continue;
+      // oxlint-disable-next-line no-await-in-loop
+      await expect(transport(attempt), `${attempt.method} ${attempt.path}`).rejects.toThrow(
+        GitHubScopeError,
+      );
+    }
+    expect(reached).toEqual([]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

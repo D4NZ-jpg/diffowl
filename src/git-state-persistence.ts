@@ -64,11 +64,64 @@ function remoteGitEnvironment(token: string | undefined): NodeJS.ProcessEnv {
   };
 }
 
+/**
+ * The only remote write this module performs is a non-forcing, atomic push of
+ * refs under the state prefix. Enforced here, on the argv, so the token that
+ * carries `contents: write` can never be used to move a branch or tag even
+ * if a call site were changed.
+ */
+export const STATE_REF_PREFIX = "refs/diffowl/state";
+
+export class GitScopeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitScopeError";
+  }
+}
+
+const forbiddenPushFlags = new Set([
+  "-f",
+  "--force",
+  "--mirror",
+  "--all",
+  "--tags",
+  "--delete",
+  "-d",
+]);
+
+function pushDestination(refspec: string): string {
+  return refspec.includes(":") ? refspec.slice(refspec.indexOf(":") + 1) : refspec;
+}
+
+export function assertPushInScope(args: readonly string[], refPrefix = STATE_REF_PREFIX): void {
+  if (args[0] !== "push") return;
+  const flags = args.filter((arg) => arg.startsWith("-"));
+  const forbidden = flags.find(
+    (flag) => forbiddenPushFlags.has(flag) || flag.startsWith("--force-with-lease"),
+  );
+  if (forbidden !== undefined) throw new GitScopeError(`git push ${forbidden} is not permitted.`);
+  // A --dry-run push writes nothing; it is the permission probe. Real pushes must be atomic.
+  if (!flags.includes("--atomic") && !flags.includes("--dry-run")) {
+    throw new GitScopeError("git push must be --atomic.");
+  }
+  const refspecs = args
+    .slice(1)
+    .filter((arg) => !arg.startsWith("-"))
+    .slice(1);
+  for (const refspec of refspecs) {
+    const destination = pushDestination(refspec);
+    if (refspec.startsWith("+") || !destination.startsWith(`${refPrefix}/`)) {
+      throw new GitScopeError(`git push refspec ${refspec} is outside ${refPrefix}/.`);
+    }
+  }
+}
+
 function execGit(
   args: string[],
   gitDirectory = process.cwd(),
   environment: NodeJS.ProcessEnv = {},
 ): Promise<string> {
+  assertPushInScope(args);
   return new Promise((resolve, reject) => {
     execFile(
       "git",
@@ -695,7 +748,7 @@ export class GitReviewPersistenceStore implements ReviewPersistenceStore {
 
   constructor(options: GitReviewPersistenceOptions = {}) {
     this.remote = options.remote ?? "origin";
-    this.refPrefix = options.refPrefix ?? "refs/diffowl/state";
+    this.refPrefix = options.refPrefix ?? STATE_REF_PREFIX;
     this.gitDirectory = options.gitDirectory ?? process.cwd();
     this.remoteEnvironment = remoteGitEnvironment(options.token);
   }

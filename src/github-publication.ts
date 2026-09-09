@@ -1,5 +1,6 @@
 /* oxlint-disable max-lines */
 import { canonicalJsonHash } from "./canonical-json.js";
+import { assertInScope, type GitHubScope } from "./github-scope.js";
 import {
   publishFindingDiscussionUpdate,
   type FindingDiscussionPublicationReceipt,
@@ -588,8 +589,18 @@ function githubPermissionGuidance(response: Response): string {
   return ` Configure workflow permissions: ${permissions}.`;
 }
 
-export function createGitHubTransport(token: string, apiUrl = "https://api.github.com") {
+/**
+ * A transport bound to one repository and one role. Every request is checked
+ * against the allowlist in github-scope.ts before the token is attached, so
+ * the token's permissions never define what this process can reach.
+ */
+export function createGitHubTransport(
+  token: string,
+  scope: GitHubScope,
+  apiUrl = "https://api.github.com",
+) {
   return async (request: GitHubRequest): Promise<unknown> => {
+    assertInScope(scope, request);
     const response = await fetch(`${apiUrl}${request.path}`, {
       method: request.method,
       headers: {

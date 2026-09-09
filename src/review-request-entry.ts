@@ -101,7 +101,20 @@ try {
   if (issueEvent === undefined && findingEvent === undefined) {
     throw new Error("The GitHub event is not a supported pull-request command comment.");
   }
-  const transport = createGitHubTransport(token, process.env.GITHUB_API_URL);
+  // Bind the transport to the runner's own repository, not the payload's.
+  // GitHub writes both, but GITHUB_REPOSITORY cannot be influenced by any
+  // event content; a payload that disagrees is refused outright.
+  const repository = process.env.GITHUB_REPOSITORY;
+  if (repository === undefined || repository === "")
+    throw new Error("GITHUB_REPOSITORY is required.");
+  if ((issueEvent ?? findingEvent)!.repository !== repository) {
+    throw new Error("The event repository does not match the workflow repository.");
+  }
+  const transport = createGitHubTransport(
+    token,
+    { repository, role: "router" },
+    process.env.GITHUB_API_URL,
+  );
   delete process.env.GITHUB_TOKEN;
   const workflow = (process.env.INPUT_WORKFLOW ?? "review-owl.yml").trim();
   if (workflow === "") throw new Error("The Review workflow input must not be empty.");

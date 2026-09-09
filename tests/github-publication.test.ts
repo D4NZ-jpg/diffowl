@@ -31,6 +31,8 @@ const target = {
   changedLines: [{ path: "src/handler.ts", line: 7 }],
 };
 
+const scope = { repository: "example/review-target", role: "review" as const };
+
 const authorization = {
   sourceRunVerified: true,
   surfaces: ["pull_request_review"] as const,
@@ -1127,9 +1129,12 @@ function publicationAdapterTests(): void {
       return new Response("{}", { status: 200 });
     };
     try {
-      await createGitHubTransport("secret-token")({
+      await createGitHubTransport(
+        "secret-token",
+        scope,
+      )({
         method: "POST",
-        path: "/test",
+        path: "/repos/example/review-target/pulls/42/reviews",
         body: { safe: true },
       });
     } finally {
@@ -1152,7 +1157,13 @@ function publicationAdapterTests(): void {
       });
     try {
       await expect(
-        createGitHubTransport("secret-token")({ method: "POST", path: "/reviews" }),
+        createGitHubTransport(
+          "secret-token",
+          scope,
+        )({
+          method: "POST",
+          path: "/repos/example/review-target/pulls/42/reviews",
+        }),
       ).rejects.toThrow(/permissions: pull-requests: write/iu);
     } finally {
       globalThis.fetch = originalFetch;
@@ -1164,7 +1175,13 @@ function publicationAdapterTests(): void {
     globalThis.fetch = async () => new Response(null, { status: 204 });
     try {
       await expect(
-        createGitHubTransport("secret-token")({ method: "POST", path: "/dispatch" }),
+        createGitHubTransport("secret-token", {
+          repository: "example/review-target",
+          role: "router",
+        })({
+          method: "POST",
+          path: "/repos/example/review-target/actions/workflows/review-owl.yml/dispatches",
+        }),
       ).resolves.toBeUndefined();
     } finally {
       globalThis.fetch = originalFetch;

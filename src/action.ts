@@ -117,8 +117,18 @@ export async function createActionIo(env: NodeJS.ProcessEnv): Promise<ActionIo> 
   const token = env.GITHUB_TOKEN;
   delete env.GITHUB_TOKEN;
   const credentials = await resolveActionCredentials(env);
+  // GITHUB_REPOSITORY is set by the runner from the workflow's own repository;
+  // no event payload or input can change it. runAction later refuses any event
+  // whose base repository disagrees with it.
+  const workflowRepository = env.GITHUB_REPOSITORY;
   const transport =
-    token === undefined ? undefined : createGitHubTransport(token, env.GITHUB_API_URL);
+    token === undefined || workflowRepository === undefined
+      ? undefined
+      : createGitHubTransport(
+          token,
+          { repository: workflowRepository, role: "review" },
+          env.GITHUB_API_URL,
+        );
   return {
     credentialProfiles: credentials.profiles,
     close: credentials.close,

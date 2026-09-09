@@ -57,6 +57,34 @@ Checkout uses `persist-credentials: false`. The GitHub token is supplied only to
 
 Validation commands run the pull request's own code on the runner under a scrubbed environment (`PATH`, `CI`, and no-op git config only). The provider key is held by the Action process and never enters that environment or the role sandbox. What such a command can reach is whatever else the workflow job mounted, so keep the review job to checkout plus the Action, with the provider key as its only secret, and put dependency installation in `validationCommands` (for example `npm ci --ignore-scripts`) rather than in a workflow step.
 
+## Token boundary
+
+The workflow token carries `contents: write` and `pull-requests: write`, which on their own reach every branch and every pull request in the repository. Diffowl does not rely on the permission grant to bound what it does. The token is read once when the Action starts and removed from the process environment; it is then held only by two closures, an API transport and a git push environment, and both enforce an allowlist before the token is attached to anything.
+
+The API transport is bound to `GITHUB_REPOSITORY`, which the runner sets from the workflow's own repository and no event or input can change. Every request must match one of the shapes below on that repository; anything else throws before any network call. GraphQL is limited to three named operations, one per document. Model output only ever becomes a request body, never a path or method, and a review is always posted with `event: COMMENT`.
+
+| Role           | Method          | Path under `/repos/{repository}`                                        |
+| -------------- | --------------- | ----------------------------------------------------------------------- |
+| review, router | GET             | `/pulls/{n}`                                                            |
+| review         | GET             | `/pulls/{n}/reviews`                                                    |
+| review, router | GET             | `/pulls/{n}/comments`                                                   |
+| router         | GET             | `/pulls/comments/{id}`                                                  |
+| review, router | GET             | `/issues/{n}/comments`                                                  |
+| review, router | GET             | `/collaborators/{login}/permission`                                     |
+| review         | POST            | `/pulls/{n}/reviews` (always `COMMENT`)                                 |
+| review         | POST            | `/pulls/{n}/comments`                                                   |
+| review, router | POST            | `/pulls/{n}/comments/{id}/replies`                                      |
+| review, router | POST            | `/issues/{n}/comments`                                                  |
+| router         | POST            | `/issues/comments/{id}/reactions`, `/pulls/comments/{id}/reactions`     |
+| router         | POST            | `/actions/workflows/{file}/dispatches` (ref is the default branch)      |
+| review         | POST `/graphql` | `DiffowlFindingThread`, `DiffowlResolveFinding`, `DiffowlReopenFinding` |
+
+Not reachable, regardless of permission: branches, tags, releases, merges, approvals, issues other than the pull request, other workflows, secrets, variables, repository settings, or any other repository. The list is generated from the same table the transport enforces (`scopeSurface()` in `github-scope.ts`), and the threat suite asserts each of those refusals with no network call made.
+
+The git side has the same shape. The only remote write is `git push --atomic` of refs under `refs/diffowl/state/`; the argv guard refuses `--force`, `--force-with-lease`, `+` refspecs, `--delete`, `--tags`, `--mirror`, and any destination outside that prefix. The permission probe is a `--dry-run` push that writes nothing.
+
+`contents: write` is still wider than the state refs need, because GitHub cannot scope a token to a ref prefix. To make the surplus inert at the repository level, add a ruleset on `refs/heads/*` and `refs/tags/*` that restricts updates and does not list the GitHub Actions app in its bypass list.
+
 ## State boundary
 
 GitHub-hosted trusted runs use dedicated Git refs. Self-hosted runs must use an explicit trusted directory. Diffowl does not silently fall back to comments, artifacts, caches, variables, or ephemeral workspace files when required durable state fails.
